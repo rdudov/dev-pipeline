@@ -2,7 +2,7 @@
 
 `dev-pipeline` is an experimental, Codex-centered software-development pipeline. One native Codex session owns the path from prepared requirements to implementation evidence. Independent agents are intended for bounded review and verification, not a mandatory document handoff chain.
 
-The CLI starts a new owner attempt, genuinely continues its recorded Codex session, or explicitly starts a linked new attempt over existing artifacts. Bootstrap 3 also provides compact scenario and architecture gates plus bounded review contracts. Increment orchestration and application-specific adapters are deliberately not implemented here.
+The CLI starts a new owner attempt, genuinely continues its recorded Codex session, or explicitly starts a linked new attempt over existing artifacts. It provides compact scenario, architecture, walking-skeleton, and vertical-increment gates plus bounded review contracts. Application-specific adapters and routed convention packs remain outside the current core.
 
 ## Requirements
 
@@ -76,6 +76,35 @@ An unresolved material question emits `blocked_on_user_decision`, persists an ac
 
 Build a bounded review packet with `dev-pipeline review packet`. The command binds the review question, constraints, target instructions, evidence, exclusions, artifact version, and SHA-256 digest. Validate the reviewer’s single structured envelope with `dev-pipeline review decision`; only `approved`, `rework_required`, `blocked`, and `rejected` are accepted. A stale artifact digest or an “approved” envelope hiding findings is rejected. Non-approved decisions exit with status 4.
 
+## Walking skeleton and vertical increments
+
+Submit the first observable increment after scenario and architecture checkpoints:
+
+```bash
+dev-pipeline increment submit \
+  --task-ref issue-123 \
+  --state-dir /path/to/existing-attempt-state \
+  --input /path/to/increment-1.json
+```
+
+The first increment must be `walking_skeleton`; later increments must be `vertical_increment`. Each maps named scenarios and failure modes to required evidence, records source/deletion deltas, and identifies temporary seams. Stubs and temporary adapters are permitted only at a `new_boundary` or `unavailable_external` boundary and require a replacement milestone.
+
+Evidence levels are ordered `structural`, `unit`, `skeleton`, `integrated`, `live`, and `deployed`. Structural and unit evidence may support development but cannot satisfy an increment gate. The walking skeleton requires at least real-entrypoint skeleton evidence; vertical increments require at least integrated evidence. Every named scenario and failure mode must be covered by passing required evidence.
+
+Submission records `increment_ready_for_review`. Build an `increment` review packet for that exact artifact, then accept it with the approved envelope:
+
+```bash
+dev-pipeline increment accept \
+  --task-ref issue-123 \
+  --state-dir /path/to/existing-attempt-state \
+  --input /path/to/increment-1.json \
+  --packet /path/to/increment-review-packet.json \
+  --decision /path/to/increment-review-decision.json \
+  --next-step "Build vertical increment 2"
+```
+
+A rework, blocked, rejected, stale, or mismatched decision cannot complete the increment. The next increment cannot be submitted until the preceding one has approved review, and a completed increment cannot be reopened through resubmission.
+
 ## Scope and trust boundary
 
 The pipeline invokes Codex with the requested sandbox and working repository. Review Codex's own authentication, configuration, sandbox, and approval setup before use. Lifecycle state does not store prompts or raw model events, but caller-supplied paths and runtime identifiers are operational metadata and should be protected accordingly.
@@ -86,7 +115,7 @@ The neutral adapter-facing vocabulary covers meaningful run start, checkpoint or
 increment completion, a structured `blocked_on_user_decision`, failure, and
 completion. Transport credentials and destination policy remain outside the core.
 
-See [Architecture](docs/architecture.md), [Lifecycle schema](docs/lifecycle.md), [Checkpoint contracts](docs/checkpoints.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
+See [Architecture](docs/architecture.md), [Lifecycle schema](docs/lifecycle.md), [Checkpoint contracts](docs/checkpoints.md), [Increment lifecycle](docs/increments.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## Runtime support
 

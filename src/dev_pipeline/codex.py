@@ -55,6 +55,7 @@ def resume_codex_owner(
     *,
     codex_bin: str,
     repository: Path,
+    sandbox: str,
     model: str | None,
     native_session_id: str,
     prompt: str,
@@ -63,7 +64,15 @@ def resume_codex_owner(
     diagnostics_prefix: Path | None = None,
 ) -> CodexStartResult:
     """Resume exactly one opaque Codex session; never falls back to a new session."""
-    command = [codex_bin, "exec", "resume", native_session_id, "--json"]
+    command = [
+        codex_bin,
+        "exec",
+        "--sandbox",
+        sandbox,
+        "resume",
+        native_session_id,
+        "--json",
+    ]
     if model:
         command.extend(["--model", model])
     command.append("-")

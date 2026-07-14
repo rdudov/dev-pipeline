@@ -224,4 +224,14 @@ class LifecycleStore:
                     snapshot.pop("active_blocker", None)
             elif event["kind"] == "blocked_on_user_decision":
                 snapshot["active_blocker"] = payload
+            elif event["kind"] == "increment_ready_for_review":
+                snapshot.setdefault("increments", {})[payload["increment"]] = {
+                    **payload,
+                    "status": "ready_for_review",
+                }
+            elif event["kind"] == "increment_completed":
+                snapshot.setdefault("increments", {})[payload["increment"]] = {
+                    **payload,
+                    "status": "completed",
+                }
         return snapshot

@@ -43,3 +43,10 @@ The derived snapshot includes a `checkpoints` map. A completed checkpoint record
 its artifact reference/digest and next step. A material semantic question records
 `active_blocker` and does not create a completed checkpoint. The append-only event
 ledger remains authoritative; checkpoint JSON stays a caller-owned artifact.
+
+Increment submission emits `increment_ready_for_review` and projects the sequence
+as `ready_for_review` with artifact digest, mapped scenarios, and achieved evidence
+level. Only a matching approved bounded review permits `increment_completed` and a
+`completed` projection. The next sequence cannot advance while its predecessor is
+pending review. Increment artifacts and reviewer prose are not independent state
+machines; the ledger projection remains authoritative.

@@ -10,7 +10,7 @@ from typing import Any
 
 SCHEMA_VERSION = "1.0"
 DECISIONS = frozenset({"approved", "rework_required", "blocked", "rejected"})
-REVIEW_TYPES = frozenset({"scenario", "architecture"})
+REVIEW_TYPES = frozenset({"scenario", "architecture", "increment"})
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:

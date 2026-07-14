@@ -103,6 +103,7 @@ def test_resume_appends_run_to_same_attempt_and_session(tmp_path, monkeypatch):
 
     def fake_resume(**kwargs):
         assert kwargs["native_session_id"] == "session-a"
+        assert kwargs["sandbox"] == "danger-full-access"
         kwargs["on_process_started"](11)
         return CodexStartResult(0, "session-a", "")
 
@@ -110,6 +111,7 @@ def test_resume_appends_run_to_same_attempt_and_session(tmp_path, monkeypatch):
     result = cli.main([
         "owner", "resume", "--task-ref", "task-1", "--instruction-file", str(continuation),
         "--repo", str(tmp_path / "repo"), "--state-dir", str(tmp_path / "state"),
+        "--sandbox", "danger-full-access",
     ])
 
     assert result == 0
@@ -175,12 +177,14 @@ def test_real_resume_adapter_constructs_codex_only_command(tmp_path):
     )
     executable.chmod(0o755)
     result = resume_codex_owner(
-        codex_bin=str(executable), repository=tmp_path, model=None,
+        codex_bin=str(executable), repository=tmp_path, sandbox="danger-full-access", model=None,
         native_session_id="opaque-id", prompt="continue",
         on_process_started=lambda pid: None, on_session_discovered=lambda session: None,
     )
     assert result.exit_code == 0
-    assert json.loads(capture.read_text()) == ["exec", "resume", "opaque-id", "--json", "-"]
+    assert json.loads(capture.read_text()) == [
+        "exec", "--sandbox", "danger-full-access", "resume", "opaque-id", "--json", "-"
+    ]
 
 
 def test_codex_boundary_persists_raw_diagnostics_on_conflicting_identity(tmp_path):

@@ -17,6 +17,7 @@ from .checkpoints import (
     validate_scenario_checkpoint,
 )
 from .lifecycle import LifecycleStore, RunIdentity
+from .increments import achieved_evidence_level, validate_increment
 
 
 def emit(event: dict[str, object]) -> None:
@@ -140,6 +141,7 @@ def owner_resume(args: argparse.Namespace) -> int:
         result = resume_codex_owner(
             codex_bin=args.codex_bin,
             repository=repository,
+            sandbox=args.sandbox,
             model=args.model,
             native_session_id=expected_session,
             prompt=prompt,
@@ -237,6 +239,85 @@ def review_decision(args: argparse.Namespace) -> int:
     return 0 if decision["decision"] == "approved" else 4
 
 
+def _increment_prerequisites(checkpoint: dict[str, object], state: dict[str, object]) -> None:
+    checkpoints = state.get("checkpoints", {})
+    for name, digest_field in (
+        ("scenario", "scenario_artifact_digest"),
+        ("architecture", "architecture_artifact_digest"),
+    ):
+        prior = checkpoints.get(name, {})
+        if prior.get("status") != "completed" or prior.get("artifact_digest") != checkpoint[digest_field]:
+            raise ValueError(f"Increment {name} digest does not match completed lifecycle state")
+    increments = state.get("increments", {})
+    sequence = checkpoint["sequence"]
+    if sequence > 1:
+        prior = increments.get(str(sequence - 1), {})
+        if prior.get("status") != "completed":
+            raise ValueError("Previous increment requires approved review before advancing")
+    future = [int(item) for item in increments if int(item) > sequence]
+    if future:
+        raise ValueError("Cannot revise an increment after a later increment exists")
+
+
+def increment_submit(args: argparse.Namespace) -> int:
+    artifact = args.input.resolve()
+    checkpoint = validate_increment(_read_json(artifact))
+    store = LifecycleStore(args.state_dir)
+    identity, state = store.load_attempt()
+    if identity.task_ref != args.task_ref:
+        raise ValueError("Lifecycle state belongs to a different task")
+    _increment_prerequisites(checkpoint, state)
+    current = state.get("increments", {}).get(str(checkpoint["sequence"]), {})
+    if current.get("status") == "completed":
+        raise ValueError("Completed increment cannot be resubmitted")
+    event = store.append(identity, "increment_ready_for_review", {
+        "increment": str(checkpoint["sequence"]),
+        "increment_kind": checkpoint["increment_kind"],
+        "artifact": str(artifact),
+        "artifact_digest": artifact_digest(artifact),
+        "scenario_ids": checkpoint["scenario_ids"],
+        "evidence_level": achieved_evidence_level(checkpoint),
+    })
+    emit(event)
+    return 0
+
+
+def increment_accept(args: argparse.Namespace) -> int:
+    artifact = args.input.resolve()
+    checkpoint = validate_increment(_read_json(artifact))
+    packet = validate_review_packet(_read_json(args.packet))
+    decision = validate_decision(_read_json(args.decision), packet)
+    if packet["review_type"] != "increment":
+        raise ValueError("Increment acceptance requires an increment review packet")
+    digest = artifact_digest(artifact)
+    if packet["artifact"]["digest"] != digest:
+        raise ValueError("Increment review packet does not bind the submitted artifact")
+    if packet["artifact"]["version"] != checkpoint["artifact_version"]:
+        raise ValueError("Increment review packet version does not match the submitted artifact")
+    if decision["decision"] != "approved":
+        raise ValueError("Increment requires approved focused review before completion")
+    store = LifecycleStore(args.state_dir)
+    identity, state = store.load_attempt()
+    if identity.task_ref != args.task_ref:
+        raise ValueError("Lifecycle state belongs to a different task")
+    _increment_prerequisites(checkpoint, state)
+    pending = state.get("increments", {}).get(str(checkpoint["sequence"]), {})
+    if pending.get("status") != "ready_for_review" or pending.get("artifact_digest") != digest:
+        raise ValueError("Increment artifact is not the current submitted review candidate")
+    event = store.append(identity, "increment_completed", {
+        "increment": str(checkpoint["sequence"]),
+        "increment_kind": checkpoint["increment_kind"],
+        "artifact": str(artifact),
+        "artifact_digest": digest,
+        "review_artifact_digest": packet["artifact"]["digest"],
+        "scenario_ids": checkpoint["scenario_ids"],
+        "evidence_level": achieved_evidence_level(checkpoint),
+        "next_step": args.next_step,
+    })
+    emit(event)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dev-pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -267,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--state-dir", required=True, type=Path)
     resume.add_argument("--codex-bin", default="codex")
     resume.add_argument("--model")
+    resume.add_argument(
+        "--sandbox",
+        choices=("read-only", "workspace-write", "danger-full-access"),
+        default="workspace-write",
+    )
     resume.set_defaults(handler=owner_resume)
     retry = owner_commands.add_parser("retry", help="Start a new attempt over existing artifacts")
     add_start_arguments(retry)
@@ -284,7 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     review = commands.add_parser("review", help="Build and validate bounded review contracts")
     review_commands = review.add_subparsers(dest="review_command", required=True)
     packet = review_commands.add_parser("packet")
-    packet.add_argument("--review-type", required=True, choices=("scenario", "architecture"))
+    packet.add_argument("--review-type", required=True, choices=("scenario", "architecture", "increment"))
     packet.add_argument("--artifact", required=True, type=Path)
     packet.add_argument("--artifact-version", required=True)
     packet.add_argument("--question", required=True)
@@ -298,6 +384,21 @@ def build_parser() -> argparse.ArgumentParser:
     decision.add_argument("--packet", required=True, type=Path)
     decision.add_argument("--decision", required=True, type=Path)
     decision.set_defaults(handler=review_decision)
+    increment = commands.add_parser("increment", help="Submit and accept reviewed increments")
+    increment_commands = increment.add_subparsers(dest="increment_command", required=True)
+    submit = increment_commands.add_parser("submit")
+    submit.add_argument("--task-ref", required=True)
+    submit.add_argument("--state-dir", required=True, type=Path)
+    submit.add_argument("--input", required=True, type=Path)
+    submit.set_defaults(handler=increment_submit)
+    accept = increment_commands.add_parser("accept")
+    accept.add_argument("--task-ref", required=True)
+    accept.add_argument("--state-dir", required=True, type=Path)
+    accept.add_argument("--input", required=True, type=Path)
+    accept.add_argument("--packet", required=True, type=Path)
+    accept.add_argument("--decision", required=True, type=Path)
+    accept.add_argument("--next-step", required=True)
+    accept.set_defaults(handler=increment_accept)
     return parser
 
 

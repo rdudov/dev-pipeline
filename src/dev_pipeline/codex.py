@@ -17,13 +17,18 @@ class CodexStartResult:
     native_session_id: str | None
     stderr: str
     stdout: str = ""
+    final_message: str | None = None
 
 
-def build_owner_prompt(task_ref: str, instruction: str, artifacts: list[Path]) -> str:
+def build_owner_prompt(
+    task_ref: str, instruction: str, artifacts: list[Path], conventions: str = ""
+) -> str:
     artifact_lines = "\n".join(f"- {path}" for path in artifacts) or "- None supplied"
     return f"""You are the continuous engineering owner for prepared task {task_ref}.
 
 Own the causal chain from the supplied requirements through implementation and verification. Work directly in the configured repository. Treat the original instruction and supplied artifacts as durable task input, not as conversation history. Stop and report a concrete question if product semantics are materially ambiguous. Prefer the existing owning component over a parallel mechanism, and verify meaningful behavior through the real entrypoint.
+
+{conventions}
 
 Original instruction:
 {instruction}
@@ -101,6 +106,7 @@ def _run_codex(
     process.stdin.close()
 
     native_session_id: str | None = None
+    final_message: str | None = None
     stderr_parts: list[str] = []
     stdout_parts: list[str] = []
     assert process.stderr is not None
@@ -129,6 +135,14 @@ def _run_codex(
                 elif discovered != native_session_id:
                     process.kill()
                     raise RuntimeError("Codex emitted conflicting native session identifiers")
+            item = event.get("item")
+            if (
+                event.get("type") == "item.completed"
+                and isinstance(item, dict)
+                and item.get("type") == "agent_message"
+                and isinstance(item.get("text"), str)
+            ):
+                final_message = item["text"]
         exit_code = process.wait()
     except BaseException:
         process.kill()
@@ -152,4 +166,5 @@ def _run_codex(
         native_session_id=native_session_id,
         stderr="".join(stderr_parts),
         stdout="".join(stdout_parts),
+        final_message=final_message,
     )

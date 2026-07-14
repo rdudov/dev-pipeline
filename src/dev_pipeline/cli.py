@@ -8,6 +8,16 @@ import sys
 from pathlib import Path
 
 from .codex import build_owner_prompt, resume_codex_owner, start_codex_owner
+from .conventions import (
+    AGENT_ROLES,
+    GATES,
+    RISKS,
+    build_context_packet,
+    render_agent_prompt,
+    render_conventions,
+    route_conventions,
+    validate_context_packet,
+)
 from .checkpoints import (
     artifact_digest,
     build_review_packet,
@@ -62,6 +72,7 @@ def _run_start(args: argparse.Namespace, *, attempt_origin: str, previous_attemp
         args.task_ref,
         instruction_file.read_text(encoding="utf-8"),
         artifacts,
+        render_conventions(route_conventions(args.gate, args.risk)),
     )
     try:
         result = start_codex_owner(
@@ -135,7 +146,11 @@ def owner_resume(args: argparse.Namespace) -> int:
         emit(store.append(identity, kind, payload))
 
     record("run_started", {"run_operation": "native_session_resume"})
-    prompt = instruction_file.read_text(encoding="utf-8")
+    prompt = (
+        render_conventions(route_conventions(args.gate, args.risk))
+        + "\n\nContinuation instruction:\n"
+        + instruction_file.read_text(encoding="utf-8")
+    )
     expected_session = attempt["native_session_id"]
     try:
         result = resume_codex_owner(
@@ -318,6 +333,55 @@ def increment_accept(args: argparse.Namespace) -> int:
     return 0
 
 
+def context_build(args: argparse.Namespace) -> int:
+    packet = build_context_packet(
+        role=args.role, purpose=args.purpose, question=args.question,
+        artifacts=[path.resolve() for path in args.artifact], evidence=args.evidence,
+        exclusions=args.exclude, risks=args.risk,
+        artifact_version=args.artifact_version,
+    )
+    args.output.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(packet, sort_keys=True))
+    return 0
+
+
+def agent_run(args: argparse.Namespace) -> int:
+    packet = validate_context_packet(_read_json(args.packet))
+    result = start_codex_owner(
+        codex_bin=args.codex_bin, repository=args.repo.resolve(), sandbox=args.sandbox,
+        model=args.model, prompt=render_agent_prompt(packet),
+        on_process_started=lambda pid: None, on_session_discovered=lambda session: None,
+        diagnostics_prefix=args.diagnostics_prefix,
+    )
+    output: dict[str, object] = {
+        "schema_version": "1.0", "runtime": "codex", "role": packet["role"],
+        "packet_digest": packet["packet_digest"], "native_session_id": result.native_session_id,
+        "exit_code": result.exit_code,
+    }
+    response_ok = bool(result.final_message)
+    if packet["role"] in {"scenario_review", "architecture_review", "diff_review"} and result.final_message:
+        try:
+            decision = json.loads(result.final_message)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Bounded review response is not a JSON decision envelope") from exc
+        artifact = packet["artifacts"][0]
+        review_packet = {
+            "schema_version": "1.0", "review_type": packet["decision_review_type"],
+            "question": packet["question"],
+            "artifact": {"path": artifact["path"], "version": packet["artifact_version"],
+                         "digest": artifact["digest"]},
+            "original_constraints": [rule for pack in packet["convention_packs"] for rule in pack["rules"]],
+            "target_instructions": [packet["purpose"]], "evidence": packet["evidence"],
+            "exclusions": packet["exclusions"], "decision_schema_version": "1.0",
+        }
+        output["decision"] = validate_decision(decision, review_packet)
+    else:
+        output["response"] = result.final_message
+    args.output.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(output, sort_keys=True))
+    return 0 if result.exit_code == 0 and response_ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dev-pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -332,6 +396,8 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--state-dir", required=True, type=Path)
         command.add_argument("--codex-bin", default="codex")
         command.add_argument("--model")
+        command.add_argument("--gate", choices=tuple(sorted(GATES)), default="core")
+        command.add_argument("--risk", action="append", choices=tuple(sorted(RISKS)), default=[])
         command.add_argument(
             "--sandbox",
             choices=("read-only", "workspace-write", "danger-full-access"),
@@ -348,6 +414,8 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--state-dir", required=True, type=Path)
     resume.add_argument("--codex-bin", default="codex")
     resume.add_argument("--model")
+    resume.add_argument("--gate", choices=tuple(sorted(GATES)), default="core")
+    resume.add_argument("--risk", action="append", choices=tuple(sorted(RISKS)), default=[])
     resume.add_argument(
         "--sandbox",
         choices=("read-only", "workspace-write", "danger-full-access"),
@@ -399,6 +467,29 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument("--decision", required=True, type=Path)
     accept.add_argument("--next-step", required=True)
     accept.set_defaults(handler=increment_accept)
+    context = commands.add_parser("context", help="Build one bounded Codex agent context")
+    context.add_argument("--role", required=True, choices=tuple(AGENT_ROLES))
+    context.add_argument("--purpose", required=True)
+    context.add_argument("--question", required=True)
+    context.add_argument("--artifact", action="append", required=True, type=Path)
+    context.add_argument("--artifact-version")
+    context.add_argument("--evidence", action="append", default=[])
+    context.add_argument("--exclude", action="append", required=True)
+    context.add_argument("--risk", action="append", choices=tuple(sorted(RISKS)), default=[])
+    context.add_argument("--output", required=True, type=Path)
+    context.set_defaults(handler=context_build)
+    agent = commands.add_parser("agent", help="Explicitly run one bounded Codex agent")
+    agent.add_argument("--packet", required=True, type=Path)
+    agent.add_argument("--repo", required=True, type=Path)
+    agent.add_argument("--output", required=True, type=Path)
+    agent.add_argument("--diagnostics-prefix", required=True, type=Path)
+    agent.add_argument("--codex-bin", default="codex")
+    agent.add_argument("--model")
+    agent.add_argument(
+        "--sandbox", choices=("read-only", "workspace-write", "danger-full-access"),
+        default="read-only",
+    )
+    agent.set_defaults(handler=agent_run)
     return parser
 
 

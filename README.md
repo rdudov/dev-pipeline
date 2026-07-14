@@ -105,6 +105,12 @@ dev-pipeline increment accept \
 
 A rework, blocked, rejected, stale, or mismatched decision cannot complete the increment. The next increment cannot be submitted until the preceding one has approved review, and a completed increment cannot be reopened through resubmission.
 
+## Routed conventions and selective agents
+
+Owner start/resume accepts one `--gate` and repeated explicitly triggered `--risk` values. The default owner context is the compact core pack only. It never aggregates the frozen legacy analyst/architect/planner/developer prompts.
+
+`dev-pipeline context` builds one digest-bound English context for a bounded `scout`, `scenario_review`, `architecture_review`, `diff_review`, or `live_verification`. `dev-pipeline agent` explicitly runs that one packet through Codex, normally read-only. These commands do not create a scheduler or mandatory role chain. See [Routed conventions](docs/conventions.md).
+
 ## Scope and trust boundary
 
 The pipeline invokes Codex with the requested sandbox and working repository. Review Codex's own authentication, configuration, sandbox, and approval setup before use. Lifecycle state does not store prompts or raw model events, but caller-supplied paths and runtime identifiers are operational metadata and should be protected accordingly.
@@ -115,7 +121,7 @@ The neutral adapter-facing vocabulary covers meaningful run start, checkpoint or
 increment completion, a structured `blocked_on_user_decision`, failure, and
 completion. Transport credentials and destination policy remain outside the core.
 
-See [Architecture](docs/architecture.md), [Lifecycle schema](docs/lifecycle.md), [Checkpoint contracts](docs/checkpoints.md), [Increment lifecycle](docs/increments.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
+See [Architecture](docs/architecture.md), [Lifecycle schema](docs/lifecycle.md), [Checkpoint contracts](docs/checkpoints.md), [Increment lifecycle](docs/increments.md), [Routed conventions](docs/conventions.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## Runtime support
 

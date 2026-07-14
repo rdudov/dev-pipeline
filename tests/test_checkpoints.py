@@ -180,6 +180,34 @@ def test_real_cli_accepts_complete_architecture_through_lifecycle_entrypoint(tmp
     assert snapshot["checkpoints"]["architecture"]["status"] == "completed"
 
 
+def test_real_cli_blocks_empty_isolation_plan_when_discovery_marks_security_applicable(tmp_path):
+    state = tmp_path / "state"
+    completed_store(state)
+    scenario_value = scenario()
+    next(
+        item for item in scenario_value["dependency_inventory"]
+        if item["surface"] == "security_boundaries"
+    )["applicability"] = "applicable"
+    scenario_artifact = tmp_path / "scenario.json"
+    scenario_artifact.write_text(json.dumps(scenario_value))
+    scenario_result = run_cli(
+        "checkpoint", "scenario", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(scenario_artifact), "--next-step", "Architecture checkpoint",
+    )
+    assert scenario_result.returncode == 0
+    scenario_event = json.loads(scenario_result.stdout)
+    artifact = tmp_path / "architecture.json"
+    artifact.write_text(json.dumps(architecture(scenario_event["payload"]["artifact_digest"])))
+
+    result = run_cli(
+        "checkpoint", "architecture", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact), "--next-step", "Review",
+    )
+
+    assert result.returncode == 2
+    assert "marked security_boundaries applicable" in result.stderr
+
+
 def test_architecture_refuses_missing_or_stale_scenario_link(tmp_path):
     state = tmp_path / "state"
     completed_store(state)

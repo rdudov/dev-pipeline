@@ -213,6 +213,17 @@ def checkpoint_apply(args: argparse.Namespace) -> int:
             raise ValueError("Architecture checkpoint requires a completed scenario checkpoint")
         if checkpoint["scenario_artifact_digest"] != scenario_state.get("artifact_digest"):
             raise ValueError("Architecture checkpoint scenario digest does not match lifecycle state")
+        scenario_artifact = Path(str(scenario_state.get("artifact", "")))
+        scenario = validate_scenario_checkpoint(_read_json(scenario_artifact))
+        security = next(
+            item for item in scenario["dependency_inventory"]
+            if item["surface"] == "security_boundaries"
+        )
+        if security["applicability"] == "applicable" and not checkpoint["isolation_boundaries"]:
+            raise ValueError(
+                "Architecture checkpoint requires isolation_boundaries because scenario discovery "
+                "marked security_boundaries applicable"
+            )
     questions = checkpoint["blocking_questions"]
     if questions:
         first = questions[0]

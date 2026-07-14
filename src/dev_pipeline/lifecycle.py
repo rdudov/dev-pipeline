@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .events import EVENT_KINDS, validate_event
+
 
 SCHEMA_VERSION = "1.0"
 
@@ -52,6 +54,8 @@ class LifecycleStore:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = payload or {}
+        if kind not in EVENT_KINDS:
+            raise ValueError(f"Unsupported lifecycle event kind: {kind}")
         with self.lock_path.open("a+", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             events = self._read_events_unlocked()
@@ -67,6 +71,7 @@ class LifecycleStore:
                 "kind": kind,
                 "payload": payload,
             }
+            validate_event(event)
             encoded = (json.dumps(event, sort_keys=True) + "\n").encode()
             descriptor = os.open(
                 self.ledger_path,

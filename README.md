@@ -38,6 +38,10 @@ The pipeline invokes Codex with the requested sandbox and working repository. Re
 
 Application integrations belong outside this repository. An adapter may resolve application-specific tasks and project selected lifecycle events into its own status artifacts, but only this core interprets Codex events and transitions attempt/run state.
 
+The neutral adapter-facing vocabulary covers meaningful run start, checkpoint or
+increment completion, a structured `blocked_on_user_decision`, failure, and
+completion. Transport credentials and destination policy remain outside the core.
+
 See [Architecture](docs/architecture.md), [Lifecycle schema](docs/lifecycle.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## Development

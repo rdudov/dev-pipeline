@@ -24,6 +24,15 @@ The core neither scans an application task index nor assumes application filenam
 
 The native session ID is accepted only from a `thread.started` JSON event. A non-zero process exit or a zero exit without that event fails both the run and current attempt visibly.
 
+## Bootstrap 1A event boundary
+
+The core defines and validates a compact neutral vocabulary for start,
+checkpoint/increment progress, human-decision blockers, failure, and completion.
+It does not select notification destinations or deliver messages. External
+adapters subscribe to emitted JSONL and retain their own projection/delivery
+cursor. Later checkpoint orchestration will produce the corresponding events;
+defining the vocabulary does not prematurely implement those gates.
+
 ## Deferred behavior
 
 Native resume and retry are intentionally absent. A future native resume will append a new run to the same attempt and prove the same runtime session identity. A retry over existing artifacts will create a new attempt and new session; it will never be labeled resume. Checkpoint schemas, bounded review, convention routing, recovery operations, and adapters are later vertical increments.

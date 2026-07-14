@@ -6,6 +6,9 @@ import pytest
 
 from dev_pipeline import lifecycle
 from dev_pipeline.lifecycle import LifecycleStore, RunIdentity
+from dev_pipeline.events import validate_event
+
+START_PAYLOAD = {"attempt_origin": "new_owner_session", "repository": "/example"}
 
 
 def test_store_orders_events_and_projects_separate_outcomes(tmp_path):
@@ -36,7 +39,7 @@ def test_store_refuses_to_advance_corrupt_ledger(tmp_path):
     store = LifecycleStore(tmp_path)
 
     with pytest.raises(RuntimeError, match="corrupt at line 2"):
-        store.append(RunIdentity.create("example-task"), "attempt_started")
+        store.append(RunIdentity.create("example-task"), "attempt_started", START_PAYLOAD)
 
     assert len((tmp_path / "events.jsonl").read_text().splitlines()) == 2
 
@@ -44,10 +47,10 @@ def test_store_refuses_to_advance_corrupt_ledger(tmp_path):
 def test_store_rejects_reuse_by_another_attempt(tmp_path):
     store = LifecycleStore(tmp_path)
     first = RunIdentity.create("example-task")
-    store.append(first, "attempt_started")
+    store.append(first, "attempt_started", START_PAYLOAD)
 
     with pytest.raises(RuntimeError, match="different attempt"):
-        store.append(RunIdentity.create("example-task"), "attempt_started")
+        store.append(RunIdentity.create("example-task"), "attempt_started", START_PAYLOAD)
 
     assert len((tmp_path / "events.jsonl").read_text().splitlines()) == 1
 
@@ -64,7 +67,63 @@ def test_store_retries_short_writes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lifecycle.os, "write", short_write)
     store = LifecycleStore(tmp_path)
-    event = store.append(RunIdentity.create("example-task"), "attempt_started")
+    event = store.append(RunIdentity.create("example-task"), "attempt_started", START_PAYLOAD)
 
     assert len(write_sizes) > 1
     assert json.loads((tmp_path / "events.jsonl").read_text()) == event
+
+
+def test_neutral_checkpoint_and_hitl_vocabulary_is_adapter_safe(tmp_path):
+    store = LifecycleStore(tmp_path)
+    identity = RunIdentity.create("task-360")
+    store.append(identity, "attempt_started", START_PAYLOAD)
+    checkpoint = store.append(
+        identity,
+        "checkpoint_completed",
+        {"checkpoint": "architecture", "next_step": "Build the walking skeleton"},
+    )
+    blocked = store.append(
+        identity,
+        "blocked_on_user_decision",
+        {
+            "question": "Which rollout policy should apply?",
+            "options": [{"label": "Opt in", "consequence": "Existing default stays unchanged"}],
+            "artifact": "architecture-delta.md",
+        },
+    )
+
+    assert validate_event(checkpoint)["kind"] == "checkpoint_completed"
+    assert validate_event(blocked)["payload"]["question"].startswith("Which")
+
+
+def test_event_vocabulary_rejects_incomplete_hitl_payload(tmp_path):
+    store = LifecycleStore(tmp_path)
+    identity = RunIdentity.create("task-360")
+
+    with pytest.raises(ValueError, match="requires non-empty question"):
+        store.append(identity, "blocked_on_user_decision", {"artifact": "plan.md"})
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("sequence", 0), ("schema_version", "2.0"), ("task_ref", 7)],
+)
+def test_event_envelope_rejects_invalid_types(field, value):
+    event = {
+        "schema_version": "1.0", "event_id": "event-1", "sequence": 1,
+        "timestamp": "2026-07-14T00:00:00+00:00", "task_ref": "task-1",
+        "attempt_id": "attempt-1", "run_id": "run-1", "kind": "attempt_started", "payload": {},
+    }
+    event[field] = value
+
+    with pytest.raises(ValueError):
+        validate_event(event)
+
+
+@pytest.mark.parametrize(
+    "kind,payload",
+    [("native_session_discovered", {}), ("process_started", {"pid": "7"}), ("run_completed", {})],
+)
+def test_existing_event_kinds_require_typed_payloads(tmp_path, kind, payload):
+    with pytest.raises(ValueError):
+        LifecycleStore(tmp_path).append(RunIdentity.create("task-1"), kind, payload)

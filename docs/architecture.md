@@ -14,13 +14,19 @@ Callers supply values through the CLI:
 
 The core neither scans an application task index nor assumes application filenames. It has no Telegram, credential-routing, authorization, or destination-policy behavior. A companion or product adapter depends on the public core and may project neutral events; the dependency never points back into that product.
 
-## Bootstrap 1 flow
+## Owner flow
 
 1. Validate caller paths and create immutable attempt/run identifiers.
 2. Append `attempt_started` and `run_started` records.
 3. launch `codex exec --json` in the supplied repository.
 4. Append the process ID and the runtime-emitted `thread_id` when observed.
 5. Record run and attempt outcomes separately.
+
+Continuation loads and validates the complete ledger plus its atomic projection, creates a new run ID on the same attempt, and invokes `codex exec resume <opaque-id> --json`. The runtime-reported identity must equal the recorded identity. A non-zero exit, missing identity, or changed identity produces `native_resume_unavailable` and never launches a replacement session.
+
+The Codex boundary durably writes each run's raw stdout JSONL and stderr beneath the attempt state's `diagnostics/` directory, including parser/conflicting-identity exception paths. These files are operator diagnostics, not lifecycle input; adapters and lifecycle projection do not parse them.
+
+Explicit retry uses the ordinary start boundary but writes a caller-selected new state directory with a new attempt/session identity and `attempt_origin=retry_existing_artifacts`. Its `previous_attempt_id` links the immutable prior attempt. This simple layout keeps recovery conservative: missing, corrupt, divergent, or incomplete prior metadata is refused rather than inferred.
 
 The native session ID is accepted only from a `thread.started` JSON event. A non-zero process exit or a zero exit without that event fails both the run and current attempt visibly.
 
@@ -35,4 +41,4 @@ defining the vocabulary does not prematurely implement those gates.
 
 ## Deferred behavior
 
-Native resume and retry are intentionally absent. A future native resume will append a new run to the same attempt and prove the same runtime session identity. A retry over existing artifacts will create a new attempt and new session; it will never be labeled resume. Checkpoint schemas, bounded review, convention routing, recovery operations, and adapters are later vertical increments.
+Checkpoint schemas, bounded review, convention routing, richer recovery operations, and adapters are later vertical increments.

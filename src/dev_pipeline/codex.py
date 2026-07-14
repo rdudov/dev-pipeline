@@ -1,9 +1,10 @@
-"""Native Codex CLI adapter for the initial owner-session start operation."""
+"""Localized command and event boundary for native Codex owner sessions."""
 
 from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ class CodexStartResult:
     exit_code: int
     native_session_id: str | None
     stderr: str
+    stdout: str = ""
 
 
 def build_owner_prompt(task_ref: str, instruction: str, artifacts: list[Path]) -> str:
@@ -40,13 +42,45 @@ def start_codex_owner(
     prompt: str,
     on_process_started: Callable[[int], None],
     on_session_discovered: Callable[[str], None],
+    diagnostics_prefix: Path | None = None,
 ) -> CodexStartResult:
     command = [codex_bin, "exec", "--json", "--cd", str(repository), "--sandbox", sandbox]
     if model:
         command.extend(["--model", model])
     command.append("-")
+    return _run_codex(command, repository, prompt, on_process_started, on_session_discovered, diagnostics_prefix)
+
+
+def resume_codex_owner(
+    *,
+    codex_bin: str,
+    repository: Path,
+    model: str | None,
+    native_session_id: str,
+    prompt: str,
+    on_process_started: Callable[[int], None],
+    on_session_discovered: Callable[[str], None],
+    diagnostics_prefix: Path | None = None,
+) -> CodexStartResult:
+    """Resume exactly one opaque Codex session; never falls back to a new session."""
+    command = [codex_bin, "exec", "resume", native_session_id, "--json"]
+    if model:
+        command.extend(["--model", model])
+    command.append("-")
+    return _run_codex(command, repository, prompt, on_process_started, on_session_discovered, diagnostics_prefix)
+
+
+def _run_codex(
+    command: list[str],
+    repository: Path,
+    prompt: str,
+    on_process_started: Callable[[int], None],
+    on_session_discovered: Callable[[str], None],
+    diagnostics_prefix: Path | None,
+) -> CodexStartResult:
     process = subprocess.Popen(
         command,
+        cwd=repository,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -59,6 +93,7 @@ def start_codex_owner(
 
     native_session_id: str | None = None
     stderr_parts: list[str] = []
+    stdout_parts: list[str] = []
     assert process.stderr is not None
 
     def drain_stderr() -> None:
@@ -68,8 +103,11 @@ def start_codex_owner(
     stderr_thread = threading.Thread(target=drain_stderr, name="codex-stderr", daemon=True)
     stderr_thread.start()
     assert process.stdout is not None
+    failure: tuple[type[BaseException], BaseException, object] | None = None
+    exit_code = -1
     try:
         for line in process.stdout:
+            stdout_parts.append(line)
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -86,11 +124,23 @@ def start_codex_owner(
     except BaseException:
         process.kill()
         process.wait()
-        raise
+        failure = sys.exc_info()
     finally:
         stderr_thread.join()
+        if diagnostics_prefix is not None:
+            diagnostics_prefix.parent.mkdir(parents=True, exist_ok=True)
+            diagnostics_prefix.with_suffix(".stdout.jsonl").write_text(
+                "".join(stdout_parts), encoding="utf-8"
+            )
+            diagnostics_prefix.with_suffix(".stderr.log").write_text(
+                "".join(stderr_parts), encoding="utf-8"
+            )
+    if failure is not None:
+        _, error, traceback = failure
+        raise error.with_traceback(traceback)  # type: ignore[arg-type]
     return CodexStartResult(
         exit_code=exit_code,
         native_session_id=native_session_id,
         stderr="".join(stderr_parts),
+        stdout="".join(stdout_parts),
     )

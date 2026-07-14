@@ -127,3 +127,32 @@ def test_event_envelope_rejects_invalid_types(field, value):
 def test_existing_event_kinds_require_typed_payloads(tmp_path, kind, payload):
     with pytest.raises(ValueError):
         LifecycleStore(tmp_path).append(RunIdentity.create("task-1"), kind, payload)
+
+
+def test_load_attempt_refuses_missing_or_divergent_snapshot(tmp_path):
+    store = LifecycleStore(tmp_path)
+    identity = RunIdentity.create("task-1")
+    store.append(identity, "attempt_started", {
+        "attempt_origin": "new_owner_session", "runtime": "codex",
+        "repository": "/example", "worktree": None,
+    })
+    store.append(identity, "native_session_discovered", {"native_session_id": "session-1"})
+    store.snapshot_path.unlink()
+    with pytest.raises(RuntimeError, match="snapshot is missing"):
+        store.load_attempt()
+
+
+def test_process_crash_after_discovery_retains_resumable_identity(tmp_path):
+    store = LifecycleStore(tmp_path)
+    identity = RunIdentity.create("task-1")
+    store.append(identity, "attempt_started", {
+        "attempt_origin": "new_owner_session", "runtime": "codex", "repository": "/example",
+    })
+    store.append(identity, "run_started", {"run_operation": "native_session_start"})
+    store.append(identity, "native_session_discovered", {"native_session_id": "session-1"})
+    store.append(identity, "run_failed", {"reason": "process crashed"})
+    store.append(identity, "attempt_failed", {"reason": "process crashed"})
+
+    loaded, snapshot = store.load_attempt()
+    assert loaded.attempt_id == identity.attempt_id
+    assert snapshot["attempt"]["native_session_id"] == "session-1"

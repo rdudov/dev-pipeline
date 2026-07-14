@@ -36,6 +36,9 @@ class RunIdentity:
             run_id=f"run_{uuid.uuid4().hex}",
         )
 
+    def next_run(self) -> "RunIdentity":
+        return RunIdentity(self.task_ref, self.attempt_id, f"run_{uuid.uuid4().hex}")
+
 
 class LifecycleStore:
     """Append events under a lock and atomically replace a derived snapshot."""
@@ -92,6 +95,32 @@ class LifecycleStore:
             self._write_snapshot_unlocked(self._project(events))
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         return event
+
+    def load_attempt(self) -> tuple[RunIdentity, dict[str, Any]]:
+        """Load a complete, internally consistent attempt without repairing it."""
+        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            events = self._read_events_unlocked()
+            if not events:
+                raise RuntimeError("Lifecycle state has no attempt to continue")
+            for event in events:
+                validate_event(event)
+            snapshot = self._project(events)
+            if not self.snapshot_path.is_file():
+                raise RuntimeError("Lifecycle state snapshot is missing; refusing ambiguous continuation")
+            persisted = json.loads(self.snapshot_path.read_text(encoding="utf-8"))
+            if persisted != snapshot:
+                raise RuntimeError("Lifecycle state snapshot diverges from its ledger; refusing continuation")
+            attempt = snapshot["attempt"]
+            required = ("attempt_id", "runtime", "repository", "native_session_id")
+            missing = [field for field in required if not attempt.get(field)]
+            if missing:
+                raise RuntimeError(f"Lifecycle attempt is missing {missing[0]}; refusing continuation")
+            if attempt["runtime"] != "codex":
+                raise RuntimeError("Lifecycle attempt is not a Codex attempt")
+            identity = RunIdentity(events[0]["task_ref"], attempt["attempt_id"], events[-1]["run_id"])
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return identity, snapshot
 
     def _read_events_unlocked(self) -> list[dict[str, Any]]:
         if not self.ledger_path.exists():
@@ -163,6 +192,7 @@ class LifecycleStore:
             elif event["kind"] == "run_started":
                 run.update(payload)
                 run["outcome"] = "running"
+                attempt["outcome"] = "active"
             elif event["kind"] == "process_started":
                 run.update(payload)
             elif event["kind"] == "native_session_discovered":
@@ -173,6 +203,9 @@ class LifecycleStore:
             elif event["kind"] == "run_failed":
                 run.update(payload)
                 run["outcome"] = "failed"
+            elif event["kind"] == "native_resume_unavailable":
+                run.update(payload)
+                run["outcome"] = "native_resume_unavailable"
             elif event["kind"] == "attempt_completed":
                 attempt.update(payload)
                 attempt["outcome"] = "completed"

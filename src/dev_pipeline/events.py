@@ -11,6 +11,7 @@ EVENT_KINDS = frozenset(
         "run_started",
         "process_started",
         "native_session_discovered",
+        "native_resume_unavailable",
         "checkpoint_completed",
         "increment_completed",
         "blocked_on_user_decision",
@@ -30,6 +31,7 @@ REQUIRED_PAYLOAD_FIELDS = {
     "blocked_on_user_decision": ("question", "artifact"),
     "run_failed": ("reason",),
     "attempt_failed": ("reason",),
+    "native_resume_unavailable": ("reason",),
 }
 
 INTEGER_PAYLOAD_FIELDS = {

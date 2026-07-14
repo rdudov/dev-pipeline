@@ -2,7 +2,11 @@
 
 `dev-pipeline` is an experimental, Codex-centered software-development pipeline. One native Codex session owns the path from prepared requirements to implementation evidence. Independent agents are intended for bounded review and verification, not a mandatory document handoff chain.
 
-The CLI starts a new owner attempt, genuinely continues its recorded Codex session, or explicitly starts a linked new attempt over existing artifacts. It provides compact scenario, architecture, walking-skeleton, and vertical-increment gates plus bounded review contracts. Application-specific adapters and routed convention packs remain outside the current core.
+The CLI starts a new owner attempt, genuinely continues its recorded Codex session, or explicitly starts a linked new attempt over existing artifacts. It provides compact scenario, architecture, walking-skeleton, and vertical-increment gates, routed convention packs, and bounded review contracts. Application-specific adapters remain outside the public core.
+
+The discoverable [`$dev-pipeline` skill](skills/dev-pipeline/SKILL.md) provides a
+compact Codex invocation guide. The CLI and package documentation remain the
+canonical workflow and schema authority.
 
 ## Requirements
 

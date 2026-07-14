@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Pipeline"
+  short_description: "Run the Codex owner engineering workflow"
+  default_prompt: "Use $dev-pipeline to take this engineering task through owner checkpoints and verified increments."

@@ -212,4 +212,16 @@ class LifecycleStore:
             elif event["kind"] == "attempt_failed":
                 attempt.update(payload)
                 attempt["outcome"] = "failed"
+            elif event["kind"] == "checkpoint_completed":
+                snapshot.setdefault("checkpoints", {})[payload["checkpoint"]] = {
+                    "status": "completed",
+                    "artifact": payload.get("artifact"),
+                    "artifact_digest": payload.get("artifact_digest"),
+                    "next_step": payload["next_step"],
+                }
+                blocker = snapshot.get("active_blocker", {})
+                if blocker.get("checkpoint") == payload["checkpoint"]:
+                    snapshot.pop("active_blocker", None)
+            elif event["kind"] == "blocked_on_user_decision":
+                snapshot["active_blocker"] = payload
         return snapshot

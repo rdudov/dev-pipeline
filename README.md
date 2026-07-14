@@ -2,7 +2,7 @@
 
 `dev-pipeline` is an experimental, Codex-centered software-development pipeline. One native Codex session owns the path from prepared requirements to implementation evidence. Independent agents are intended for bounded review and verification, not a mandatory document handoff chain.
 
-The Bootstrap 2 CLI starts a new owner attempt, genuinely continues its recorded Codex session, or explicitly starts a linked new attempt over existing artifacts. Checkpoints, review orchestration, and application-specific adapters are deliberately not implemented yet.
+The CLI starts a new owner attempt, genuinely continues its recorded Codex session, or explicitly starts a linked new attempt over existing artifacts. Bootstrap 3 also provides compact scenario and architecture gates plus bounded review contracts. Increment orchestration and application-specific adapters are deliberately not implemented here.
 
 ## Requirements
 
@@ -58,6 +58,24 @@ dev-pipeline owner retry \
 
 Resume never falls back to start. An unavailable session emits `native_resume_unavailable`; retry records `attempt_origin=retry_existing_artifacts`, a new attempt ID, and a new Codex-issued session ID.
 
+## Scenario and architecture checkpoints
+
+Checkpoint artifacts are canonical English JSON objects with schema version `1.0`. Apply a scenario checkpoint to an existing owner attempt with:
+
+```bash
+dev-pipeline checkpoint scenario \
+  --task-ref issue-123 \
+  --state-dir /path/to/existing-attempt-state \
+  --input /path/to/scenario-checkpoint.json \
+  --next-step "Run bounded scenario review"
+```
+
+Use `checkpoint architecture` for the architecture delta. Scenario records require actors, triggers, expected outcomes, behavioral acceptance, failure modes, assumptions, and explicit blocking questions. Architecture records require the production path, owning layer, reuse plan, deletion plan, forbidden parallel mechanism, verification path, and a digest link to the scenario artifact.
+
+An unresolved material question emits `blocked_on_user_decision`, persists an active blocker, and exits with status 3 without completing the checkpoint. A complete contract emits `checkpoint_completed` with its artifact digest. The command validates owner artifacts; it does not infer product semantics from prose.
+
+Build a bounded review packet with `dev-pipeline review packet`. The command binds the review question, constraints, target instructions, evidence, exclusions, artifact version, and SHA-256 digest. Validate the reviewer’s single structured envelope with `dev-pipeline review decision`; only `approved`, `rework_required`, `blocked`, and `rejected` are accepted. A stale artifact digest or an “approved” envelope hiding findings is rejected. Non-approved decisions exit with status 4.
+
 ## Scope and trust boundary
 
 The pipeline invokes Codex with the requested sandbox and working repository. Review Codex's own authentication, configuration, sandbox, and approval setup before use. Lifecycle state does not store prompts or raw model events, but caller-supplied paths and runtime identifiers are operational metadata and should be protected accordingly.
@@ -68,7 +86,7 @@ The neutral adapter-facing vocabulary covers meaningful run start, checkpoint or
 increment completion, a structured `blocked_on_user_decision`, failure, and
 completion. Transport credentials and destination policy remain outside the core.
 
-See [Architecture](docs/architecture.md), [Lifecycle schema](docs/lifecycle.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
+See [Architecture](docs/architecture.md), [Lifecycle schema](docs/lifecycle.md), [Checkpoint contracts](docs/checkpoints.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## Runtime support
 

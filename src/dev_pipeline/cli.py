@@ -8,6 +8,14 @@ import sys
 from pathlib import Path
 
 from .codex import build_owner_prompt, resume_codex_owner, start_codex_owner
+from .checkpoints import (
+    artifact_digest,
+    build_review_packet,
+    validate_architecture_checkpoint,
+    validate_decision,
+    validate_review_packet,
+    validate_scenario_checkpoint,
+)
 from .lifecycle import LifecycleStore, RunIdentity
 
 
@@ -160,6 +168,75 @@ def owner_resume(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_json(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        raise ValueError(f"JSON input does not exist: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON input must contain an object: {path}")
+    return value
+
+
+def checkpoint_apply(args: argparse.Namespace) -> int:
+    artifact = args.input.resolve()
+    value = _read_json(artifact)
+    validator = (
+        validate_scenario_checkpoint if args.checkpoint_type == "scenario"
+        else validate_architecture_checkpoint
+    )
+    checkpoint = validator(value)
+    store = LifecycleStore(args.state_dir)
+    prior_identity, state = store.load_attempt()
+    if prior_identity.task_ref != args.task_ref:
+        raise ValueError("Lifecycle state belongs to a different task")
+    identity = prior_identity
+    if args.checkpoint_type == "architecture":
+        scenario_state = state.get("checkpoints", {}).get("scenario", {})
+        if scenario_state.get("status") != "completed":
+            raise ValueError("Architecture checkpoint requires a completed scenario checkpoint")
+        if checkpoint["scenario_artifact_digest"] != scenario_state.get("artifact_digest"):
+            raise ValueError("Architecture checkpoint scenario digest does not match lifecycle state")
+    questions = checkpoint["blocking_questions"]
+    if questions:
+        first = questions[0]
+        event = store.append(identity, "blocked_on_user_decision", {
+            "question": first["question"],
+            "options": first.get("options", []),
+            "artifact": str(artifact),
+            "checkpoint": args.checkpoint_type,
+            "reason": "material_product_semantics",
+        })
+        emit(event)
+        return 3
+    event = store.append(identity, "checkpoint_completed", {
+        "checkpoint": args.checkpoint_type,
+        "artifact": str(artifact),
+        "artifact_digest": artifact_digest(artifact),
+        "next_step": args.next_step,
+    })
+    emit(event)
+    return 0
+
+
+def review_packet(args: argparse.Namespace) -> int:
+    packet = build_review_packet(
+        review_type=args.review_type, artifact=args.artifact.resolve(),
+        artifact_version=args.artifact_version, question=args.question,
+        constraints=args.constraint, instructions=args.instruction,
+        evidence=args.evidence, exclusions=args.exclude,
+    )
+    args.output.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(packet, sort_keys=True))
+    return 0
+
+
+def review_decision(args: argparse.Namespace) -> int:
+    packet = validate_review_packet(_read_json(args.packet))
+    decision = validate_decision(_read_json(args.decision), packet)
+    print(json.dumps(decision, sort_keys=True))
+    return 0 if decision["decision"] == "approved" else 4
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dev-pipeline")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -195,6 +272,32 @@ def build_parser() -> argparse.ArgumentParser:
     add_start_arguments(retry)
     retry.add_argument("--previous-state-dir", required=True, type=Path)
     retry.set_defaults(handler=owner_retry)
+    checkpoint = commands.add_parser("checkpoint", help="Apply an owner checkpoint contract")
+    checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_type", required=True)
+    for checkpoint_type in ("scenario", "architecture"):
+        command = checkpoint_commands.add_parser(checkpoint_type)
+        command.add_argument("--task-ref", required=True)
+        command.add_argument("--state-dir", required=True, type=Path)
+        command.add_argument("--input", required=True, type=Path)
+        command.add_argument("--next-step", required=True)
+        command.set_defaults(handler=checkpoint_apply)
+    review = commands.add_parser("review", help="Build and validate bounded review contracts")
+    review_commands = review.add_subparsers(dest="review_command", required=True)
+    packet = review_commands.add_parser("packet")
+    packet.add_argument("--review-type", required=True, choices=("scenario", "architecture"))
+    packet.add_argument("--artifact", required=True, type=Path)
+    packet.add_argument("--artifact-version", required=True)
+    packet.add_argument("--question", required=True)
+    packet.add_argument("--constraint", action="append", required=True)
+    packet.add_argument("--instruction", action="append", required=True)
+    packet.add_argument("--evidence", action="append", default=[])
+    packet.add_argument("--exclude", action="append", required=True)
+    packet.add_argument("--output", required=True, type=Path)
+    packet.set_defaults(handler=review_packet)
+    decision = review_commands.add_parser("decision")
+    decision.add_argument("--packet", required=True, type=Path)
+    decision.add_argument("--decision", required=True, type=Path)
+    decision.set_defaults(handler=review_decision)
     return parser
 
 

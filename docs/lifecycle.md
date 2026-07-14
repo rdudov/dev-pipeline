@@ -38,3 +38,8 @@ These events are transport-neutral. Product adapters decide which transitions
 are worth notifying, resolve authorized destinations, and handle delivery
 deduplication. Credentials, chat identifiers, and bot payloads never belong in
 this schema.
+
+The derived snapshot includes a `checkpoints` map. A completed checkpoint records
+its artifact reference/digest and next step. A material semantic question records
+`active_blocker` and does not create a completed checkpoint. The append-only event
+ledger remains authoritative; checkpoint JSON stays a caller-owned artifact.

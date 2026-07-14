@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from dev_pipeline.checkpoints import (
+    DEPENDENCY_SURFACES,
     build_review_packet,
     validate_architecture_checkpoint,
     validate_decision,
@@ -22,6 +23,13 @@ def scenario(*, questions=None):
         "artifact_id": "scenario-contract",
         "artifact_version": "3",
         "source_refs": ["prepared-request"],
+        "dependency_inventory": [{
+            "surface": surface,
+            "applicability": "applicable" if surface in {"source_repositories", "runtime_entrypoints"} else "not_applicable",
+            "owner": "repository owner" if surface == "source_repositories" else "verified task owner",
+            "evidence_refs": [f"discovery:{surface}"],
+            "change_impact": "inspect and update" if surface == "source_repositories" else "verified no change",
+        } for surface in DEPENDENCY_SURFACES],
         "scenarios": [{
             "id": "SC-05", "actor": "owner", "trigger": "requirements are inspected",
             "expected_outcome": "material ambiguity blocks implementation",
@@ -43,6 +51,7 @@ def architecture(scenario_digest="sha256:" + "a" * 64):
         "deletion_plan": ["remove no branch; no superseded checkpoint mechanism exists"],
         "forbidden_parallel_mechanism": "no reviewer scheduler or second checkpoint state store",
         "verification_path": ["installed dev-pipeline checkpoint command", "persisted lifecycle event"],
+        "isolation_boundaries": [],
         "blocking_questions": [],
     }
 
@@ -73,12 +82,50 @@ def test_scenario_contract_requires_behavioral_acceptance_and_failure_modes():
         validate_scenario_checkpoint(value)
 
 
+def test_scenario_contract_rejects_omitted_cross_cutting_dependency_surface():
+    value = scenario()
+    value["dependency_inventory"] = [
+        item for item in value["dependency_inventory"] if item["surface"] != "backup_restore_and_retention"
+    ]
+    with pytest.raises(ValueError, match="backup_restore_and_retention"):
+        validate_scenario_checkpoint(value)
+
+
+def test_not_applicable_dependency_still_requires_owner_evidence_and_impact():
+    value = scenario()
+    item = next(entry for entry in value["dependency_inventory"] if entry["applicability"] == "not_applicable")
+    item["evidence_refs"] = []
+    with pytest.raises(ValueError, match="non-empty list"):
+        validate_scenario_checkpoint(value)
+
+
 def test_architecture_gate_requires_owning_reuse_deletion_and_verification():
     for field in ("owning_layer", "reuse_plan", "deletion_plan", "verification_path"):
         value = architecture()
         value[field] = "" if field == "owning_layer" else []
         with pytest.raises(ValueError):
             validate_architecture_checkpoint(value)
+
+
+def test_isolation_boundary_requires_allowed_denied_and_safe_negative_probe():
+    value = architecture()
+    value["isolation_boundaries"] = [{
+        "name": "tenant filesystem",
+        "production_boundary": "rootless worker container",
+        "allowed_operations": ["write current tenant task directory"],
+        "denied_operations": ["read another tenant marker"],
+        "safe_negative_probes": [],
+    }]
+    with pytest.raises(ValueError, match="safe_negative_probes"):
+        validate_architecture_checkpoint(value)
+
+    value["isolation_boundaries"][0]["safe_negative_probes"] = [{
+        "operation": "read a disposable marker outside the mount",
+        "expected_denial": "path is absent",
+        "safety_basis": "marker is created solely for the test and no production path is mutated",
+        "evidence_path": "isolation-test.log",
+    }]
+    assert validate_architecture_checkpoint(value)["isolation_boundaries"]
 
 
 def test_real_cli_blocks_material_semantics_before_checkpoint_completion(tmp_path):

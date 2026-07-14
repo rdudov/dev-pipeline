@@ -11,6 +11,12 @@ from typing import Any
 SCHEMA_VERSION = "1.0"
 DECISIONS = frozenset({"approved", "rework_required", "blocked", "rejected"})
 REVIEW_TYPES = frozenset({"scenario", "architecture", "increment"})
+DEPENDENCY_SURFACES = (
+    "source_repositories", "runtime_entrypoints", "services_and_processes",
+    "containers_and_images", "host_identities_and_permissions", "configuration_and_secrets",
+    "durable_storage", "backup_restore_and_retention", "deployment_update_and_rollback",
+    "observability", "network", "scheduled_jobs", "external_integrations", "security_boundaries",
+)
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -75,6 +81,26 @@ def validate_scenario_checkpoint(value: Any) -> dict[str, Any]:
     _string(record, "artifact_id", "Scenario checkpoint")
     _string(record, "artifact_version", "Scenario checkpoint")
     _strings(record, "source_refs", "Scenario checkpoint")
+    inventory = record.get("dependency_inventory")
+    if not isinstance(inventory, list):
+        raise ValueError("Scenario checkpoint requires a dependency_inventory list")
+    found: set[str] = set()
+    for dependency in inventory:
+        item = _object(dependency, "Dependency inventory item")
+        surface = _string(item, "surface", "Dependency inventory item")
+        if surface not in DEPENDENCY_SURFACES:
+            raise ValueError(f"Unsupported dependency surface: {surface}")
+        if surface in found:
+            raise ValueError(f"Duplicate dependency surface: {surface}")
+        found.add(surface)
+        if item.get("applicability") not in {"applicable", "not_applicable"}:
+            raise ValueError(f"Dependency surface {surface} requires applicable or not_applicable")
+        _string(item, "owner", f"Dependency surface {surface}")
+        _strings(item, "evidence_refs", f"Dependency surface {surface}")
+        _string(item, "change_impact", f"Dependency surface {surface}")
+    missing = set(DEPENDENCY_SURFACES) - found
+    if missing:
+        raise ValueError(f"Dependency inventory is incomplete; missing: {', '.join(sorted(missing))}")
     scenarios = record.get("scenarios")
     if not isinstance(scenarios, list) or not scenarios:
         raise ValueError("Scenario checkpoint requires a non-empty scenarios list")
@@ -106,6 +132,22 @@ def validate_architecture_checkpoint(value: Any) -> dict[str, Any]:
     _strings(record, "deletion_plan", "Architecture checkpoint")
     _string(record, "forbidden_parallel_mechanism", "Architecture checkpoint")
     _strings(record, "verification_path", "Architecture checkpoint")
+    boundaries = record.get("isolation_boundaries")
+    if not isinstance(boundaries, list):
+        raise ValueError("Architecture checkpoint requires an isolation_boundaries list")
+    for boundary in boundaries:
+        item = _object(boundary, "Isolation boundary")
+        name = _string(item, "name", "Isolation boundary")
+        _string(item, "production_boundary", f"Isolation boundary {name}")
+        _strings(item, "allowed_operations", f"Isolation boundary {name}")
+        _strings(item, "denied_operations", f"Isolation boundary {name}")
+        probes = item.get("safe_negative_probes")
+        if not isinstance(probes, list) or not probes:
+            raise ValueError(f"Isolation boundary {name} requires safe_negative_probes")
+        for probe in probes:
+            probe_item = _object(probe, f"Isolation boundary {name} probe")
+            for field in ("operation", "expected_denial", "safety_basis", "evidence_path"):
+                _string(probe_item, field, f"Isolation boundary {name} probe")
     _questions(record, "Architecture checkpoint")
     return record
 

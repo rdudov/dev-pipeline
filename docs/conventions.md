@@ -10,7 +10,9 @@ An owner prompt loads `core`, its one active gate, and only explicitly triggered
 dev-pipeline owner start ... --gate architecture --risk security
 ```
 
-Gates are `core`, `scenario`, `architecture`, `increment`, `diff_review`, `live`, and `recovery`. Risk packs are `compatibility`, `security`, `service`, `provider`, `media`, `cross_repo`, and `publication`. With no flags, an ordinary owner receives only `core`; it never receives the full frozen role prompts or their examples.
+Gates are `core`, `discovery`, `scenario`, `architecture`, `increment`, `diff_review`, `live`, and `recovery`. Risk packs are `compatibility`, `security`, `service`, `provider`, `media`, `cross_repo`, and `publication`. With no flags, an ordinary owner receives only `core`; it never receives the full frozen role prompts or their examples.
+
+The `scout` role is routed to `discovery`. It must trace both source dependencies and the operational lifecycle, producing evidence for every dependency surface required by the scenario checkpoint. This prevents an application-only source scan from silently omitting deployment, backup, restore, identity, storage, or isolation owners. The security risk pack adds a separate evidence rule: both allowed and denied branches must be exercised at the real boundary using explicitly harmless negative probes.
 
 Each pack records source file/section provenance. The router preserves behavioral invariants while retiring these universal patterns:
 

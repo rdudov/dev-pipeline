@@ -4,7 +4,9 @@ Machine-facing checkpoint, packet, and decision documents are canonical English 
 
 ## Scenario checkpoint
 
-A scenario checkpoint contains `artifact_id`, `artifact_version`, `source_refs`, `scenarios`, `reversible_assumptions`, and `blocking_questions`. Each scenario has a unique `id`, `actor`, `trigger`, `expected_outcome`, non-empty behavioral `acceptance`, and a `failure_modes` list.
+A scenario checkpoint contains `artifact_id`, `artifact_version`, `source_refs`, `dependency_inventory`, `scenarios`, `reversible_assumptions`, and `blocking_questions`. Each scenario has a unique `id`, `actor`, `trigger`, `expected_outcome`, non-empty behavioral `acceptance`, and a `failure_modes` list.
+
+`dependency_inventory` is a completeness gate produced from discovery evidence. It contains exactly one entry for every supported cross-cutting surface: source repositories, runtime entrypoints, services/processes, containers/images, host identities/permissions, configuration/secrets, durable storage, backup/restore/retention, deployment/update/rollback, observability, network, scheduled jobs, external integrations, and security boundaries. Each entry records `applicability` (`applicable` or `not_applicable`), the `owner`, non-empty `evidence_refs`, and `change_impact`. “Not applicable” is an evidenced conclusion, not permission to omit the surface. An unknown owner or missing evidence must become a blocking question instead of an assumption.
 
 `blocking_questions` contains unresolved material product semantics. Each item has a concrete `question` and optional choices with `label` and `consequence`. A non-empty list blocks the checkpoint; it is not an assumption list or a general backlog.
 
@@ -18,7 +20,10 @@ An architecture checkpoint contains artifact identity and `scenario_artifact_dig
 - `deletion_plan`: superseded paths removed, or an explicit statement that none exists;
 - `forbidden_parallel_mechanism`: the duplicate mechanism the increment must avoid;
 - `verification_path`: real boundaries that prove the delta;
+- `isolation_boundaries`: zero or more security boundaries, each naming its production boundary, allowed and denied operations, and one or more `safe_negative_probes` with the operation, expected denial, safety basis, and evidence path;
 - `blocking_questions`: unresolved compatibility, migration, source-of-truth, or failure semantics.
+
+Whenever discovery marks a security boundary applicable, architecture and live review must require an isolation-boundary record. A safe negative probe uses only disposable test markers, denied reads, or harmless writes. It must not delete or overwrite production data, alter permissions, signal processes, restart services, or execute a destructive operation in the hope that the boundary rejects it. Positive-path evidence cannot close that gate.
 
 These fields are gates, not a generic architecture template. Bootstrap 3 requires bounded scenario and architecture review, but does not decide a universal review policy for future small tasks.
 

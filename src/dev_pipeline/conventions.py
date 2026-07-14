@@ -17,6 +17,11 @@ PACKS: dict[str, dict[str, Any]] = {
         "Prefer the existing owning component and do not create a parallel mechanism.",
         "Structured decisions and durable artifacts are state; prose cannot override them.",
     ], "provenance": ["00_agent_development.md: uncertainty/open questions", "01_orchestrator.md: bounded context"]},
+    "discovery": {"rules": [
+        "Build the complete cross-cutting dependency inventory before proposing a solution: source and sibling repositories, runtime entrypoints and services, containers and host identities, configuration and secrets, durable storage, backup/restore/retention, deployment/update/rollback, observability, network, scheduled jobs, and external integrations.",
+        "For every dependency surface name the owning component, concrete evidence, and change impact; mark a surface not applicable only with evidence, never by omission.",
+        "Trace both the intended production path and operational lifecycle. Missing owners, inaccessible evidence, or unresolved deployment, recovery, or isolation semantics are blockers for downstream design.",
+    ], "provenance": ["02_analyst_prompt.md: source/context discovery", "04_architect_prompt.md: production path", "08_agent_developer.md: runtime completion"]},
     "scenario": {"rules": [
         "Describe actors, triggers, outcomes, failure modes, and behavioral acceptance proportionally to risk.",
         "Raise compatibility, fallback, source-of-truth, migration, and rollout ambiguity as concrete questions.",
@@ -48,7 +53,11 @@ PACKS: dict[str, dict[str, Any]] = {
         "Return resolved, still blocked, or human escalation with a concrete continuation recommendation.",
     ], "provenance": ["01_orchestrator.md: rescuer boundary", "10_agent_blocker_rescuer.md"]},
     "risk:compatibility": {"rules": ["Require an explicit compatibility/migration decision; absent policy is a blocker, not permission to retain legacy behavior."], "provenance": ["09_agent_code_reviewer.md: compatibility wording (constrained)"]},
-    "risk:security": {"rules": ["Identify authorization, secret, destructive-operation, and data-loss branches and require representative evidence."], "provenance": ["03_tz_reviewer_prompt.md: critical operations", "09_agent_code_reviewer.md: runtime branches"]},
+    "risk:security": {"rules": [
+        "Identify authorization, isolation, secret, destructive-operation, and data-loss branches, including both allowed and denied behavior.",
+        "A positive path cannot close a security or isolation gate: execute representative safe negative probes at the real production boundary.",
+        "Negative probes must use disposable markers, denied reads, or harmless writes and must never mutate production data, disrupt services, or attempt a destructive command merely to prove it is denied.",
+    ], "provenance": ["03_tz_reviewer_prompt.md: critical operations", "09_agent_code_reviewer.md: runtime branches"]},
     "risk:service": {"rules": ["Verify the actual service/daemon/worker entrypoint, process lifecycle, restart behavior, and clean logs."], "provenance": ["08_agent_developer.md: real application entrypoint"]},
     "risk:provider": {"rules": ["Verify provider, credential, model, transport, and fallback branches separately at their real boundary."], "provenance": ["00_agent_development.md: branch evidence", "09_agent_code_reviewer.md: provider branches"]},
     "risk:media": {"rules": ["Use semantically representative media; container validity or degenerate samples do not prove behavior."], "provenance": ["09_agent_code_reviewer.md: representative media fixtures"]},
@@ -56,10 +65,10 @@ PACKS: dict[str, dict[str, Any]] = {
     "risk:publication": {"rules": ["Before publication inspect outgoing diff/history, secrets, dependencies/licenses, generated artifacts, and repository health."], "provenance": ["08_agent_developer.md: docs/runtime completion", "09_agent_code_reviewer.md: concrete diff review"]},
 }
 
-GATES = frozenset({"core", "scenario", "architecture", "increment", "diff_review", "live", "recovery"})
+GATES = frozenset({"core", "discovery", "scenario", "architecture", "increment", "diff_review", "live", "recovery"})
 RISKS = frozenset(key.removeprefix("risk:") for key in PACKS if key.startswith("risk:"))
 AGENT_ROLES = {
-    "scout": "core", "scenario_review": "scenario", "architecture_review": "architecture",
+    "scout": "discovery", "scenario_review": "scenario", "architecture_review": "architecture",
     "diff_review": "diff_review", "live_verification": "live",
 }
 ROLE_REVIEW_TYPES = {

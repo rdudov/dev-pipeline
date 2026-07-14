@@ -23,6 +23,20 @@ def test_owner_routing_loads_only_core_active_gate_and_triggered_risk():
     assert "analyst" not in rendered.lower()
 
 
+def test_scout_gets_cross_cutting_discovery_contract():
+    rendered = render_conventions(route_conventions(AGENT_ROLES["scout"], []))
+    assert "backup/restore/retention" in rendered
+    assert "not applicable only with evidence" in rendered
+    assert "operational lifecycle" in rendered
+
+
+def test_security_contract_requires_safe_negative_real_boundary_evidence():
+    rendered = render_conventions(route_conventions("live", ["security"]))
+    assert "positive path cannot close" in rendered
+    assert "real production boundary" in rendered
+    assert "never mutate production data" in rendered
+
+
 def test_normal_owner_prompt_does_not_aggregate_legacy_roles():
     prompt = build_owner_prompt("task-1", "Do the work.", [], render_conventions(route_conventions("core", [])))
     assert "[core]" in prompt

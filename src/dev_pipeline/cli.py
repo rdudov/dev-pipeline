@@ -21,6 +21,7 @@ from .conventions import (
 from .checkpoints import (
     artifact_digest,
     build_review_packet,
+    canonical_digest,
     validate_architecture_checkpoint,
     validate_decision,
     validate_review_packet,
@@ -28,6 +29,7 @@ from .checkpoints import (
 )
 from .lifecycle import LifecycleStore, RunIdentity
 from .increments import achieved_evidence_level, validate_increment
+from .evidence import scenario_branch_digest, validate_evidence_checkpoint
 
 
 def emit(event: dict[str, object]) -> None:
@@ -197,11 +199,12 @@ def _read_json(path: Path) -> dict[str, object]:
 def checkpoint_apply(args: argparse.Namespace) -> int:
     artifact = args.input.resolve()
     value = _read_json(artifact)
-    validator = (
-        validate_scenario_checkpoint if args.checkpoint_type == "scenario"
-        else validate_architecture_checkpoint
-    )
-    checkpoint = validator(value)
+    if args.checkpoint_type == "scenario":
+        checkpoint = validate_scenario_checkpoint(value)
+    elif args.checkpoint_type == "architecture":
+        checkpoint = validate_architecture_checkpoint(value)
+    else:
+        checkpoint = validate_evidence_checkpoint(value, artifact_root=artifact.parent)
     store = LifecycleStore(args.state_dir)
     prior_identity, state = store.load_attempt()
     if prior_identity.task_ref != args.task_ref:
@@ -224,7 +227,47 @@ def checkpoint_apply(args: argparse.Namespace) -> int:
                 "Architecture checkpoint requires isolation_boundaries because scenario discovery "
                 "marked security_boundaries applicable"
             )
-    questions = checkpoint["blocking_questions"]
+    if args.checkpoint_type == "evidence":
+        checkpoints = state.get("checkpoints", {})
+        for name, digest_field in (
+            ("scenario", "scenario_artifact_digest"),
+            ("architecture", "architecture_artifact_digest"),
+        ):
+            prior = checkpoints.get(name, {})
+            if prior.get("status") != "completed" or prior.get("artifact_digest") != checkpoint[digest_field]:
+                raise ValueError(f"Evidence checkpoint {name} digest does not match lifecycle state")
+            prior_path = Path(str(prior.get("artifact", "")))
+            if not prior_path.is_file() or artifact_digest(prior_path) != prior.get("artifact_digest"):
+                raise ValueError(f"Completed {name} checkpoint artifact is stale")
+        scenario_path = Path(str(checkpoints["scenario"].get("artifact", "")))
+        scenario_value = validate_scenario_checkpoint(_read_json(scenario_path))
+        checkpoint = validate_evidence_checkpoint(
+            value,
+            artifact_root=artifact.parent,
+            required_branches={
+                item["id"]: scenario_branch_digest(item)
+                for item in scenario_value["production_branches"]
+            },
+            required_product_intent_digest=canonical_digest(scenario_value["product_intent"]),
+        )
+        contract = args.task_contract.resolve()
+        if not contract.is_file() or artifact_digest(contract) != checkpoint["task_contract_digest"]:
+            raise ValueError("Evidence checkpoint task contract digest does not match")
+        contract_value = _read_json(contract)
+        required_live = contract_value.get("required_live_evidence")
+        if not isinstance(required_live, list):
+            raise ValueError("Task contract requires a required_live_evidence list")
+        required_ids = {
+            item.get("id") for item in required_live
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        if len(required_ids) != len(required_live):
+            raise ValueError("Task contract required_live_evidence entries require unique string ids")
+        subject_ids = {item["id"] for item in checkpoint["required_subjects"]}
+        missing = required_ids - subject_ids
+        if missing:
+            raise ValueError(f"Evidence checkpoint omits task-contract evidence: {sorted(missing)[0]}")
+    questions = checkpoint.get("blocking_questions", [])
     if questions:
         first = questions[0]
         event = store.append(identity, "blocked_on_user_decision", {
@@ -252,6 +295,8 @@ def review_packet(args: argparse.Namespace) -> int:
         artifact_version=args.artifact_version, question=args.question,
         constraints=args.constraint, instructions=args.instruction,
         evidence=args.evidence, exclusions=args.exclude,
+        task_contract=args.task_contract.resolve() if args.task_contract else None,
+        evidence_checkpoint=args.evidence_checkpoint.resolve() if args.evidence_checkpoint else None,
     )
     args.output.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(packet, sort_keys=True))
@@ -322,11 +367,37 @@ def increment_accept(args: argparse.Namespace) -> int:
         raise ValueError("Increment review packet version does not match the submitted artifact")
     if decision["decision"] != "approved":
         raise ValueError("Increment requires approved focused review before completion")
+    bindings = packet.get("closure_bindings")
+    if not isinstance(bindings, dict):
+        raise ValueError("Increment acceptance requires task-contract evidence closure bindings")
+    contract_path = args.task_contract.resolve()
+    evidence_path = args.evidence_checkpoint.resolve()
+    if artifact_digest(contract_path) != bindings["task_contract"]["digest"]:
+        raise ValueError("Review packet task contract binding is stale")
+    if artifact_digest(evidence_path) != bindings["evidence_checkpoint"]["digest"]:
+        raise ValueError("Review packet evidence checkpoint binding is stale")
+    evidence_checkpoint = validate_evidence_checkpoint(
+        _read_json(evidence_path), artifact_root=evidence_path.parent
+    )
+    if evidence_checkpoint["task_contract_digest"] != artifact_digest(contract_path):
+        raise ValueError("Evidence checkpoint does not bind the current task contract")
+    evidence_subjects = {item["id"] for item in evidence_checkpoint["required_subjects"]}
+    increment_subjects = set(checkpoint["scenario_ids"]) | {
+        item["id"] for item in checkpoint["failure_modes"]
+    }
+    uncovered = increment_subjects - evidence_subjects
+    if uncovered:
+        raise ValueError(
+            f"Evidence checkpoint does not cover increment subject: {sorted(uncovered)[0]}"
+        )
     store = LifecycleStore(args.state_dir)
     identity, state = store.load_attempt()
     if identity.task_ref != args.task_ref:
         raise ValueError("Lifecycle state belongs to a different task")
     _increment_prerequisites(checkpoint, state)
+    evidence_state = state.get("checkpoints", {}).get("evidence", {})
+    if evidence_state.get("status") != "completed" or evidence_state.get("artifact_digest") != artifact_digest(evidence_path):
+        raise ValueError("Increment acceptance requires the completed evidence checkpoint")
     pending = state.get("increments", {}).get(str(checkpoint["sequence"]), {})
     if pending.get("status") != "ready_for_review" or pending.get("artifact_digest") != digest:
         raise ValueError("Increment artifact is not the current submitted review candidate")
@@ -439,12 +510,14 @@ def build_parser() -> argparse.ArgumentParser:
     retry.set_defaults(handler=owner_retry)
     checkpoint = commands.add_parser("checkpoint", help="Apply an owner checkpoint contract")
     checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_type", required=True)
-    for checkpoint_type in ("scenario", "architecture"):
+    for checkpoint_type in ("scenario", "architecture", "evidence"):
         command = checkpoint_commands.add_parser(checkpoint_type)
         command.add_argument("--task-ref", required=True)
         command.add_argument("--state-dir", required=True, type=Path)
         command.add_argument("--input", required=True, type=Path)
         command.add_argument("--next-step", required=True)
+        if checkpoint_type == "evidence":
+            command.add_argument("--task-contract", required=True, type=Path)
         command.set_defaults(handler=checkpoint_apply)
     review = commands.add_parser("review", help="Build and validate bounded review contracts")
     review_commands = review.add_subparsers(dest="review_command", required=True)
@@ -458,6 +531,8 @@ def build_parser() -> argparse.ArgumentParser:
     packet.add_argument("--evidence", action="append", default=[])
     packet.add_argument("--exclude", action="append", required=True)
     packet.add_argument("--output", required=True, type=Path)
+    packet.add_argument("--task-contract", type=Path)
+    packet.add_argument("--evidence-checkpoint", type=Path)
     packet.set_defaults(handler=review_packet)
     decision = review_commands.add_parser("decision")
     decision.add_argument("--packet", required=True, type=Path)
@@ -477,6 +552,8 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument("--packet", required=True, type=Path)
     accept.add_argument("--decision", required=True, type=Path)
     accept.add_argument("--next-step", required=True)
+    accept.add_argument("--task-contract", required=True, type=Path)
+    accept.add_argument("--evidence-checkpoint", required=True, type=Path)
     accept.set_defaults(handler=increment_accept)
     context = commands.add_parser("context", help="Build one bounded Codex agent context")
     context.add_argument("--role", required=True, choices=tuple(AGENT_ROLES))

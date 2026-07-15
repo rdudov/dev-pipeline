@@ -76,9 +76,11 @@ dev-pipeline checkpoint scenario \
 
 Use `checkpoint architecture` for the architecture delta. Scenario records require actors, triggers, expected outcomes, behavioral acceptance, failure modes, assumptions, and explicit blocking questions. Architecture records require the production path, owning layer, reuse plan, deletion plan, forbidden parallel mechanism, verification path, and a digest link to the scenario artifact.
 
+Before accepting an increment, use `checkpoint evidence` with the current task contract. The checkpoint inventories mandatory scenarios, failure modes and production branches; binds exact argv-style commands, representative fixtures, real production entrypoints and digest-verified artifacts; and rejects weak, stale, aggregate-only, mock/stub/fake/harness-only evidence. Product work also declares intended jobs and a generic capability matrix covering input, processing environment, dependency policy, output, multi-artifact delivery, validation/completeness and safety. Unsupported capabilities are explicit constraints or blockers, never silent omissions.
+
 An unresolved material question emits `blocked_on_user_decision`, persists an active blocker, and exits with status 3 without completing the checkpoint. A complete contract emits `checkpoint_completed` with its artifact digest. The command validates owner artifacts; it does not infer product semantics from prose.
 
-Build a bounded review packet with `dev-pipeline review packet`. The command binds the review question, constraints, target instructions, evidence, exclusions, artifact version, and SHA-256 digest. Validate the reviewer’s single structured envelope with `dev-pipeline review decision`; only `approved`, `rework_required`, `blocked`, and `rejected` are accepted. A stale artifact digest or an “approved” envelope hiding findings is rejected. Non-approved decisions exit with status 4.
+Build a bounded review packet with `dev-pipeline review packet`. For increment closure, pass both `--task-contract` and `--evidence-checkpoint`; their SHA-256 digests become closure bindings. The command also binds the review question, constraints, target instructions, exclusions, artifact version, and reviewed-artifact digest. Validate the reviewer’s single structured envelope with `dev-pipeline review decision`; only `approved`, `rework_required`, `blocked`, and `rejected` are accepted. A stale artifact digest or an “approved” envelope hiding findings is rejected. Non-approved decisions exit with status 4.
 
 ## Walking skeleton and vertical increments
 
@@ -104,6 +106,8 @@ dev-pipeline increment accept \
   --input /path/to/increment-1.json \
   --packet /path/to/increment-review-packet.json \
   --decision /path/to/increment-review-decision.json \
+  --task-contract /path/to/task-contract.json \
+  --evidence-checkpoint /path/to/evidence.json \
   --next-step "Build vertical increment 2"
 ```
 

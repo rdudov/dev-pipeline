@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from dev_pipeline.checkpoints import build_review_packet
+from dev_pipeline.checkpoints import artifact_digest, build_review_packet, canonical_digest
+from dev_pipeline.evidence import scenario_branch_digest
 from dev_pipeline.increments import validate_increment
 from dev_pipeline.lifecycle import LifecycleStore, RunIdentity
 
@@ -66,18 +67,82 @@ def prepared_state(path: Path) -> None:
 
 def run_cli(*args: str):
     return subprocess.run(
-        [sys.executable, "-m", "dev_pipeline.cli", *args],
+        [str(Path(sys.executable).with_name("dev-pipeline")), *args],
         text=True, capture_output=True, check=False,
     )
 
 
-def review_files(tmp_path: Path, artifact: Path, decision_name="approved"):
+def closure_files(tmp_path: Path, state: Path):
+    contract = tmp_path / "task-contract.json"
+    contract.write_text(json.dumps({"required_live_evidence": [{"id": "SC-07"}, {"id": "FM-1"}]}))
+    result = tmp_path / "real-cli-result.json"
+    result.write_text('{"kind":"increment_ready_for_review"}\n')
+    evidence = tmp_path / "evidence.json"
+    branch = {
+        "id": "cli", "mode": "increment accept", "boundary": "installed CLI",
+        "expected_behavior": "complete reviewed increment", "applicability": "applicable",
+        "failure_mode_ids": ["FM-1"], "evidence_refs": ["E-1", "E-FM"],
+    }
+    branch["scenario_branch_digest"] = scenario_branch_digest(branch)
+    product_usage = {
+        "applicability": "not_applicable", "capability_matrix_applicability": "not_applicable",
+        "intent_categories": [], "jobs": [], "capabilities": [],
+    }
+    product_usage["scenario_product_intent_digest"] = canonical_digest({
+        key: product_usage[key] for key in (
+            "applicability", "intent_categories", "capability_matrix_applicability"
+        )
+    })
+    evidence.write_text(json.dumps({
+        "schema_version": "1.0", "artifact_id": "evidence-1", "artifact_version": "1",
+        "task_contract_digest": artifact_digest(contract),
+        "scenario_artifact_digest": SCENARIO_DIGEST,
+        "architecture_artifact_digest": ARCHITECTURE_DIGEST,
+        "required_subjects": [
+            {"id": "SC-07", "kind": "scenario", "mandatory": True},
+            {"id": "FM-1", "kind": "failure_mode", "mandatory": True},
+        ],
+        "production_branches": [branch], "product_usage": product_usage,
+        "evidence": [{
+            "id": "E-1", "subject_id": "SC-07", "status": "passed", "level": "skeleton",
+            "command": ["dev-pipeline", "increment", "submit"],
+            "observed_behavior": ["increment_ready_for_review was durably emitted"],
+            "scope": "branch_specific", "branch_ids": ["cli"],
+            "fixture": {"description": "prepared lifecycle state", "representative": True},
+            "entrypoint": {"name": "dev-pipeline", "real": True, "production_boundary": True},
+            "test_double": "none",
+            "artifacts": [{"path": result.name, "digest": artifact_digest(result), "kind": "behavioral_trace"}],
+        }, {
+            "id": "E-FM", "subject_id": "FM-1", "status": "passed", "level": "skeleton",
+            "command": ["dev-pipeline", "increment", "submit"],
+            "observed_behavior": ["test-only entrypoint evidence was rejected"],
+            "scope": "branch_specific", "branch_ids": ["cli"],
+            "fixture": {"description": "prepared invalid entrypoint evidence", "representative": True},
+            "entrypoint": {"name": "dev-pipeline", "real": True, "production_boundary": True},
+            "test_double": "none",
+            "artifacts": [{"path": result.name, "digest": artifact_digest(result), "kind": "behavioral_trace"}],
+        }],
+    }))
+    store = LifecycleStore(state)
+    identity, _ = store.load_attempt()
+    store.append(identity, "checkpoint_completed", {
+        "checkpoint": "evidence", "artifact": str(evidence),
+        "artifact_digest": artifact_digest(evidence), "next_step": "Focused review",
+    })
+    return contract, evidence
+
+
+def review_files(
+    tmp_path: Path, artifact: Path, decision_name="approved",
+    contract: Path | None = None, evidence_checkpoint: Path | None = None,
+):
     packet = build_review_packet(
         review_type="increment", artifact=artifact, artifact_version="1",
         question="Does this observable increment satisfy its scenarios and evidence gate?",
         constraints=["Weak evidence cannot close acceptance"],
         instructions=["Review the concrete increment only"], evidence=["events.jsonl"],
         exclusions=["Bootstrap 5 conventions"],
+        task_contract=contract, evidence_checkpoint=evidence_checkpoint,
     )
     packet_path = tmp_path / "packet.json"
     packet_path.write_text(json.dumps(packet))
@@ -134,10 +199,15 @@ def test_real_cli_requires_approved_review_before_increment_completion(tmp_path)
     assert submit.returncode == 0, submit.stderr
     assert json.loads(submit.stdout)["kind"] == "increment_ready_for_review"
     packet, decision = review_files(tmp_path, artifact, "rework_required")
+    contract = tmp_path / "unused-contract.json"
+    checkpoint = tmp_path / "unused-evidence.json"
+    contract.write_text("{}")
+    checkpoint.write_text("{}")
     rejected = run_cli(
         "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
         "--input", str(artifact), "--packet", str(packet), "--decision", str(decision),
-        "--next-step", "Vertical increment 2",
+        "--next-step", "Vertical increment 2", "--task-contract", str(contract),
+        "--evidence-checkpoint", str(checkpoint),
     )
     assert rejected.returncode == 2
     assert "requires approved focused review" in rejected.stderr
@@ -154,11 +224,13 @@ def test_real_cli_accepts_reviewed_skeleton_then_allows_vertical_increment(tmp_p
         "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
         "--input", str(artifact),
     ).returncode == 0
-    packet, decision = review_files(tmp_path, artifact)
+    contract, evidence_checkpoint = closure_files(tmp_path, state)
+    packet, decision = review_files(tmp_path, artifact, contract=contract, evidence_checkpoint=evidence_checkpoint)
     accepted = run_cli(
         "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
         "--input", str(artifact), "--packet", str(packet), "--decision", str(decision),
-        "--next-step", "Vertical increment 2",
+        "--next-step", "Vertical increment 2", "--task-contract", str(contract),
+        "--evidence-checkpoint", str(evidence_checkpoint),
     )
     assert accepted.returncode == 0, accepted.stderr
     event = json.loads(accepted.stdout)
@@ -198,3 +270,48 @@ def test_next_increment_is_blocked_while_prior_review_is_pending(tmp_path):
     )
     assert result.returncode == 2
     assert "approved review before advancing" in result.stderr
+
+
+def test_approved_review_cannot_bypass_missing_closure_bindings(tmp_path):
+    state = tmp_path / "state"
+    prepared_state(state)
+    artifact = tmp_path / "increment.json"
+    artifact.write_text(json.dumps(increment()))
+    assert run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact),
+    ).returncode == 0
+    contract, evidence_checkpoint = closure_files(tmp_path, state)
+    packet, decision = review_files(tmp_path, artifact)
+    result = run_cli(
+        "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact), "--packet", str(packet), "--decision", str(decision),
+        "--task-contract", str(contract), "--evidence-checkpoint", str(evidence_checkpoint),
+        "--next-step", "next",
+    )
+    assert result.returncode == 2
+    assert "requires task-contract evidence closure bindings" in result.stderr
+
+
+def test_approved_review_cannot_close_stale_evidence_binding(tmp_path):
+    state = tmp_path / "state"
+    prepared_state(state)
+    artifact = tmp_path / "increment.json"
+    artifact.write_text(json.dumps(increment()))
+    assert run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact),
+    ).returncode == 0
+    contract, evidence_checkpoint = closure_files(tmp_path, state)
+    packet, decision = review_files(
+        tmp_path, artifact, contract=contract, evidence_checkpoint=evidence_checkpoint,
+    )
+    evidence_checkpoint.write_text(evidence_checkpoint.read_text() + "\n")
+    result = run_cli(
+        "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact), "--packet", str(packet), "--decision", str(decision),
+        "--task-contract", str(contract), "--evidence-checkpoint", str(evidence_checkpoint),
+        "--next-step", "next",
+    )
+    assert result.returncode == 2
+    assert "evidence checkpoint binding is stale" in result.stderr

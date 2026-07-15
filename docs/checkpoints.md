@@ -4,7 +4,7 @@ Machine-facing checkpoint, packet, and decision documents are canonical English 
 
 ## Scenario checkpoint
 
-A scenario checkpoint contains `artifact_id`, `artifact_version`, `source_refs`, `dependency_inventory`, `scenarios`, `reversible_assumptions`, and `blocking_questions`. Each scenario has a unique `id`, `actor`, `trigger`, `expected_outcome`, non-empty behavioral `acceptance`, and a `failure_modes` list.
+A scenario checkpoint contains `artifact_id`, `artifact_version`, `source_refs`, `dependency_inventory`, `scenarios`, `production_branches`, `product_intent`, `reversible_assumptions`, and `blocking_questions`. Each scenario has a unique `id`, `actor`, `trigger`, `expected_outcome`, non-empty behavioral `acceptance`, and a `failure_modes` list. The scenario-owned branch inventory records each mode, boundary, expected behavior, applicability and named failure modes, including permitted/denied isolation classification. `product_intent` records generic intent categories and whether a capability matrix applies.
 
 `dependency_inventory` is a completeness gate produced from discovery evidence. It contains exactly one entry for every supported cross-cutting surface: source repositories, runtime entrypoints, services/processes, containers/images, host identities/permissions, configuration/secrets, durable storage, backup/restore/retention, deployment/update/rollback, observability, network, scheduled jobs, external integrations, and security boundaries. Each entry records `applicability` (`applicable` or `not_applicable`), the `owner`, non-empty `evidence_refs`, and `change_impact`. “Not applicable” is an evidenced conclusion, not permission to omit the surface. An unknown owner or missing evidence must become a blocking question instead of an assumption.
 
@@ -29,7 +29,13 @@ These fields are gates, not a generic architecture template. Bootstrap 3 require
 
 ## Bounded review packet
 
-`review packet` accepts only `scenario` or `architecture`. It records one question, the reviewed artifact’s absolute runtime path/version/digest, original constraints, target instructions, evidence, explicit exclusions, and the required decision schema version. The path is caller runtime data and is not embedded in package fixtures or defaults.
+`review packet` accepts `scenario`, `architecture`, or `increment`. It records one question, the reviewed artifact’s absolute runtime path/version/digest, original constraints, target instructions, evidence, explicit exclusions, and the required decision schema version. Increment closure additionally binds the task contract and evidence-checkpoint digests. Paths are caller runtime data and are not embedded in package fixtures or defaults.
+
+## Test and evidence checkpoint
+
+`checkpoint evidence` is the owning acceptance-evidence gate. It requires completed scenario and architecture digests plus the current task-contract digest. Its `required_subjects` and individual evidence records bind mandatory scenarios and failure modes to exact commands, representative fixtures, real production entrypoints, observed behavior and durable SHA-256 artifacts. Scenario-owned branch and product-intent digests prevent the evidence author from narrowing applicability. Each evidence record binds exactly one branch, and one artifact cannot close different branches. Every isolation boundary requires distinct permitted and harmless denied evidence; denied probes declare a safety basis, disposable fixture and preservation of production state.
+
+`product_usage` remains generic. Applicable product work records intended jobs, representative inputs, exact deliverables, persistence, delivery, limits and unsupported cases. When a capability matrix applies, all generic categories—input, processing environment, dependency policy, output, multi-artifact delivery, validation/completeness and safety—must be present. Concrete formats and workload profiles remain caller or product-adapter data.
 
 The reviewer returns one decision envelope with matching `review_type`, `artifact_version`, and `artifact_digest`; one decision from `approved`, `rework_required`, `blocked`, or `rejected`; evidence-linked findings; blocking questions; and evidence checked. Prose may explain the review but cannot override this envelope. Approval cannot contain findings or blocking questions, and a blocked decision must contain a question.
 

@@ -115,6 +115,46 @@ def validate_scenario_checkpoint(value: Any) -> dict[str, Any]:
             _string(item, field, f"Scenario {scenario_id}")
         _strings(item, "acceptance", f"Scenario {scenario_id}")
         _strings(item, "failure_modes", f"Scenario {scenario_id}", allow_empty=True)
+    known_failures = {
+        failure for scenario in scenarios for failure in scenario["failure_modes"]
+    }
+    branches = record.get("production_branches")
+    if not isinstance(branches, list) or not branches:
+        raise ValueError("Scenario checkpoint requires a non-empty production_branches list")
+    branch_ids: set[str] = set()
+    for branch in branches:
+        item = _object(branch, "Scenario production branch")
+        branch_id = _string(item, "id", "Scenario production branch")
+        if branch_id in branch_ids:
+            raise ValueError(f"Duplicate scenario production branch: {branch_id}")
+        branch_ids.add(branch_id)
+        for field in ("mode", "boundary", "expected_behavior"):
+            _string(item, field, f"Scenario production branch {branch_id}")
+        if item.get("applicability") not in {"applicable", "not_applicable"}:
+            raise ValueError(f"Scenario production branch {branch_id} requires applicability")
+        failures = _strings(
+            item, "failure_mode_ids", f"Scenario production branch {branch_id}", allow_empty=True
+        )
+        unknown = set(failures) - known_failures
+        if unknown:
+            raise ValueError(
+                f"Scenario production branch {branch_id} references unknown failure mode: {sorted(unknown)[0]}"
+            )
+        security_path = item.get("security_path", "not_applicable")
+        if security_path not in {"not_applicable", "permitted", "denied"}:
+            raise ValueError(f"Scenario production branch {branch_id} has unsupported security_path")
+        if security_path != "not_applicable":
+            if item["applicability"] != "applicable":
+                raise ValueError(f"Security branch {branch_id} must be applicable")
+            _string(item, "isolation_boundary", f"Scenario production branch {branch_id}")
+            if security_path == "denied":
+                _string(item, "safety_basis", f"Scenario production branch {branch_id}")
+    intent = _object(record.get("product_intent"), "Scenario product intent")
+    if intent.get("applicability") not in {"applicable", "not_applicable"}:
+        raise ValueError("Scenario product intent requires applicability")
+    _strings(intent, "intent_categories", "Scenario product intent", allow_empty=True)
+    if intent.get("capability_matrix_applicability") not in {"applicable", "not_applicable"}:
+        raise ValueError("Scenario product intent requires capability_matrix_applicability")
     _strings(record, "reversible_assumptions", "Scenario checkpoint", allow_empty=True)
     _questions(record, "Scenario checkpoint")
     return record
@@ -164,6 +204,7 @@ def artifact_digest(path: Path) -> str:
 def build_review_packet(
     *, review_type: str, artifact: Path, artifact_version: str, question: str,
     constraints: list[str], instructions: list[str], evidence: list[str], exclusions: list[str],
+    task_contract: Path | None = None, evidence_checkpoint: Path | None = None,
 ) -> dict[str, Any]:
     if review_type not in REVIEW_TYPES:
         raise ValueError(f"Unsupported review type: {review_type}")
@@ -188,6 +229,18 @@ def build_review_packet(
         "exclusions": exclusions,
         "decision_schema_version": SCHEMA_VERSION,
     }
+    if task_contract is not None or evidence_checkpoint is not None:
+        if task_contract is None or evidence_checkpoint is None:
+            raise ValueError("Review closure requires both task contract and evidence checkpoint")
+        if not task_contract.is_file() or not evidence_checkpoint.is_file():
+            raise ValueError("Review closure artifacts must exist")
+        packet["closure_bindings"] = {
+            "task_contract": {"path": str(task_contract.resolve()), "digest": artifact_digest(task_contract)},
+            "evidence_checkpoint": {
+                "path": str(evidence_checkpoint.resolve()),
+                "digest": artifact_digest(evidence_checkpoint),
+            },
+        }
     return validate_review_packet(packet)
 
 
@@ -207,6 +260,13 @@ def validate_review_packet(value: Any) -> dict[str, Any]:
     _strings(packet, "exclusions", "Review packet")
     if packet.get("decision_schema_version") != SCHEMA_VERSION:
         raise ValueError("Review packet has unsupported decision_schema_version")
+    bindings = packet.get("closure_bindings")
+    if bindings is not None:
+        bindings = _object(bindings, "Review closure bindings")
+        for name in ("task_contract", "evidence_checkpoint"):
+            binding = _object(bindings.get(name), f"Review closure {name}")
+            _string(binding, "path", f"Review closure {name}")
+            _digest(binding, "digest", f"Review closure {name}")
     return packet
 
 

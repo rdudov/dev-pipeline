@@ -36,6 +36,15 @@ def scenario(*, questions=None):
             "acceptance": ["a concrete product question is emitted"],
             "failure_modes": ["policy is invented"],
         }],
+        "production_branches": [{
+            "id": "BR-CLI", "mode": "scenario checkpoint", "boundary": "installed CLI",
+            "expected_behavior": "block material ambiguity", "applicability": "applicable",
+            "failure_mode_ids": ["policy is invented"],
+        }],
+        "product_intent": {
+            "applicability": "not_applicable", "intent_categories": [],
+            "capability_matrix_applicability": "not_applicable",
+        },
         "reversible_assumptions": [],
         "blocking_questions": questions or [],
     }

@@ -141,7 +141,7 @@ def test_conditionless_resume_unavailability_is_legacy_read_only(tmp_path):
     assert validate_event(event, allow_legacy_unclassified_resume=True) == event
 
 
-def test_load_attempt_refuses_missing_or_divergent_snapshot(tmp_path):
+def _resumable_store(tmp_path):
     store = LifecycleStore(tmp_path)
     identity = RunIdentity.create("task-1")
     store.append(identity, "attempt_started", {
@@ -149,9 +149,29 @@ def test_load_attempt_refuses_missing_or_divergent_snapshot(tmp_path):
         "repository": "/example", "worktree": None,
     })
     store.append(identity, "native_session_discovered", {"native_session_id": "session-1"})
+    return store
+
+
+def test_load_attempt_refuses_missing_snapshot(tmp_path):
+    store = _resumable_store(tmp_path)
     store.snapshot_path.unlink()
     with pytest.raises(RuntimeError, match="snapshot is missing"):
         store.load_attempt()
+
+
+def test_load_attempt_refuses_divergent_snapshot_without_repairing_either_source(tmp_path):
+    store = _resumable_store(tmp_path)
+    ledger_before = store.ledger_path.read_bytes()
+    snapshot = json.loads(store.snapshot_path.read_text())
+    snapshot["attempt"]["native_session_id"] = "different-session"
+    store.snapshot_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+    divergent_before = store.snapshot_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="snapshot diverges from its ledger"):
+        store.load_attempt()
+
+    assert store.ledger_path.read_bytes() == ledger_before
+    assert store.snapshot_path.read_bytes() == divergent_before
 
 
 def test_process_crash_after_discovery_retains_resumable_identity(tmp_path):

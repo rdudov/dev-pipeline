@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from dev_pipeline import cli
 from dev_pipeline.codex import CodexStartResult
 from dev_pipeline.codex import start_codex_owner
 from dev_pipeline.codex import resume_codex_owner
+from dev_pipeline.lifecycle import LifecycleStore
 
 
 def base_args(tmp_path: Path) -> list[str]:
@@ -155,14 +158,106 @@ def test_explicit_retry_creates_linked_new_attempt(tmp_path, monkeypatch):
     retry_args = base_args(tmp_path)
     retry_args[1] = "retry"
     retry_args[retry_args.index("--state-dir") + 1] = str(tmp_path / "retry-state")
-    retry_args.extend(["--previous-state-dir", str(tmp_path / "state")])
+    retry_args.extend([
+        "--previous-state-dir", str(tmp_path / "state"),
+        "--retry-reason", "intentional_replacement",
+    ])
     assert cli.main(retry_args) == 0
 
     retried = json.loads((tmp_path / "retry-state" / "state.json").read_text())
     assert retried["attempt"]["attempt_origin"] == "retry_existing_artifacts"
     assert retried["attempt"]["attempt_id"] != prior["attempt"]["attempt_id"]
     assert retried["attempt"]["previous_attempt_id"] == prior["attempt"]["attempt_id"]
+    assert retried["attempt"]["retry_reason"] == "intentional_replacement"
     assert retried["attempt"]["native_session_id"] == "session-b"
+
+
+def test_retry_refuses_to_replace_available_session_without_explicit_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "start_codex_owner", lambda **kwargs: (
+        kwargs["on_session_discovered"]("session-a") or CodexStartResult(0, "session-a", "")
+    ))
+    assert cli.main(base_args(tmp_path)) == 0
+    retry_args = base_args(tmp_path)
+    retry_args[1] = "retry"
+    retry_args[retry_args.index("--state-dir") + 1] = str(tmp_path / "retry-state")
+    retry_args.extend(["--previous-state-dir", str(tmp_path / "state")])
+    with pytest.raises(SystemExit):
+        cli.main(retry_args)
+    assert not (tmp_path / "retry-state" / "events.jsonl").exists()
+
+
+def test_retry_refuses_false_native_unavailable_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "start_codex_owner", lambda **kwargs: (
+        kwargs["on_session_discovered"]("session-a") or CodexStartResult(0, "session-a", "")
+    ))
+    assert cli.main(base_args(tmp_path)) == 0
+    retry_args = base_args(tmp_path)
+    retry_args[1] = "retry"
+    retry_args[retry_args.index("--state-dir") + 1] = str(tmp_path / "retry-state")
+    retry_args.extend([
+        "--previous-state-dir", str(tmp_path / "state"),
+        "--retry-reason", "native_unavailable",
+    ])
+    with pytest.raises(SystemExit):
+        cli.main(retry_args)
+    assert not (tmp_path / "retry-state" / "events.jsonl").exists()
+
+
+def test_legacy_unclassified_unavailability_is_readable_but_cannot_authorize_retry(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(cli, "start_codex_owner", lambda **kwargs: (
+        kwargs["on_session_discovered"]("session-a") or CodexStartResult(0, "session-a", "")
+    ))
+    assert cli.main(base_args(tmp_path)) == 0
+    state_dir = tmp_path / "state"
+    store = LifecycleStore(state_dir)
+    identity, _ = store.load_attempt()
+    resume_identity = identity.next_run()
+    store.append(resume_identity, "run_started", {"run_operation": "native_session_resume"})
+    store.append(resume_identity, "native_resume_unavailable", {
+        "reason": "historical runtime failure", "condition": "runtime_unavailable",
+    })
+
+    events = [json.loads(line) for line in store.ledger_path.read_text().splitlines()]
+    events[-1]["payload"].pop("condition")
+    store.ledger_path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    store._write_snapshot_unlocked(store._project(events))
+    _, legacy = store.load_attempt(allow_incomplete=True)
+    assert legacy["run"]["outcome"] == "native_resume_unavailable"
+    assert "condition" not in legacy["run"]
+
+    retry_args = base_args(tmp_path)
+    retry_args[1] = "retry"
+    retry_args[retry_args.index("--state-dir") + 1] = str(tmp_path / "retry-state")
+    retry_args.extend(["--previous-state-dir", str(state_dir)])
+    with pytest.raises(SystemExit):
+        cli.main(retry_args)
+    assert not (tmp_path / "retry-state" / "events.jsonl").exists()
+
+
+def test_missing_native_session_id_records_explicit_unavailability(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "start_codex_owner", lambda **kwargs: (
+        kwargs["on_session_discovered"]("session-a") or CodexStartResult(0, "session-a", "")
+    ))
+    assert cli.main(base_args(tmp_path)) == 0
+    events_path = tmp_path / "state" / "events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    events = [event for event in events if event["kind"] != "native_session_discovered"]
+    for sequence, event in enumerate(events, start=1):
+        event["sequence"] = sequence
+    events_path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    store = LifecycleStore(tmp_path / "state")
+    store._write_snapshot_unlocked(store._project(events))
+    continuation = tmp_path / "continue.md"
+    continuation.write_text("Continue.")
+    assert cli.main([
+        "owner", "resume", "--task-ref", "task-1", "--instruction-file", str(continuation),
+        "--repo", str(tmp_path / "repo"), "--state-dir", str(tmp_path / "state"),
+    ]) == 1
+    final = json.loads(events_path.read_text().splitlines()[-1])
+    assert final["kind"] == "native_resume_unavailable"
+    assert final["payload"]["condition"] == "missing_session_id"
 
 
 def test_real_resume_adapter_constructs_codex_only_command(tmp_path):
@@ -187,6 +282,33 @@ def test_real_resume_adapter_constructs_codex_only_command(tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    "stderr,condition",
+    [
+        ("session abc is archived. Run `codex unarchive abc` first", "archived"),
+        ("no rollout found for thread id abc", "not_found"),
+        ("transport temporarily unavailable", "runtime_unavailable"),
+    ],
+)
+def test_codex_boundary_classifies_resume_unavailability(tmp_path, stderr, condition):
+    executable = tmp_path / "fake-codex"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.read()\n"
+        f"sys.stderr.write({stderr!r})\n"
+        "raise SystemExit(9)\n"
+    )
+    executable.chmod(0o755)
+    result = resume_codex_owner(
+        codex_bin=str(executable), repository=tmp_path, sandbox="read-only", model=None,
+        native_session_id="abc", prompt="continue", on_process_started=lambda pid: None,
+        on_session_discovered=lambda session: None,
+    )
+    assert result.exit_code == 9
+    assert result.resume_unavailability == condition
+
+
 def test_codex_boundary_persists_raw_diagnostics_on_conflicting_identity(tmp_path):
     executable = tmp_path / "fake-codex"
     executable.write_text(
@@ -199,7 +321,6 @@ def test_codex_boundary_persists_raw_diagnostics_on_conflicting_identity(tmp_pat
     )
     executable.chmod(0o755)
     prefix = tmp_path / "diagnostics" / "run-1"
-    import pytest
     with pytest.raises(RuntimeError, match="conflicting"):
         start_codex_owner(
             codex_bin=str(executable), repository=tmp_path, sandbox="workspace-write",

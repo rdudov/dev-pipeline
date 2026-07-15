@@ -129,6 +129,18 @@ def test_existing_event_kinds_require_typed_payloads(tmp_path, kind, payload):
         LifecycleStore(tmp_path).append(RunIdentity.create("task-1"), kind, payload)
 
 
+def test_conditionless_resume_unavailability_is_legacy_read_only(tmp_path):
+    event = {
+        "schema_version": "1.0", "event_id": "event-1", "sequence": 1,
+        "timestamp": "2026-07-14T00:00:00+00:00", "task_ref": "task-1",
+        "attempt_id": "attempt-1", "run_id": "run-1",
+        "kind": "native_resume_unavailable", "payload": {"reason": "old runtime error"},
+    }
+    with pytest.raises(ValueError, match="requires non-empty condition"):
+        validate_event(event)
+    assert validate_event(event, allow_legacy_unclassified_resume=True) == event
+
+
 def test_load_attempt_refuses_missing_or_divergent_snapshot(tmp_path):
     store = LifecycleStore(tmp_path)
     identity = RunIdentity.create("task-1")

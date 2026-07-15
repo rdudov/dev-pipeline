@@ -96,7 +96,7 @@ class LifecycleStore:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         return event
 
-    def load_attempt(self) -> tuple[RunIdentity, dict[str, Any]]:
+    def load_attempt(self, *, allow_incomplete: bool = False) -> tuple[RunIdentity, dict[str, Any]]:
         """Load a complete, internally consistent attempt without repairing it."""
         with self.lock_path.open("a+", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -104,7 +104,7 @@ class LifecycleStore:
             if not events:
                 raise RuntimeError("Lifecycle state has no attempt to continue")
             for event in events:
-                validate_event(event)
+                validate_event(event, allow_legacy_unclassified_resume=True)
             snapshot = self._project(events)
             if not self.snapshot_path.is_file():
                 raise RuntimeError("Lifecycle state snapshot is missing; refusing ambiguous continuation")
@@ -114,9 +114,9 @@ class LifecycleStore:
             attempt = snapshot["attempt"]
             required = ("attempt_id", "runtime", "repository", "native_session_id")
             missing = [field for field in required if not attempt.get(field)]
-            if missing:
+            if missing and not allow_incomplete:
                 raise RuntimeError(f"Lifecycle attempt is missing {missing[0]}; refusing continuation")
-            if attempt["runtime"] != "codex":
+            if attempt.get("runtime") != "codex":
                 raise RuntimeError("Lifecycle attempt is not a Codex attempt")
             identity = RunIdentity(events[0]["task_ref"], attempt["attempt_id"], events[-1]["run_id"])
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

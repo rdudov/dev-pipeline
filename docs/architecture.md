@@ -22,11 +22,13 @@ The core neither scans an application task index nor assumes application filenam
 4. Append the process ID and the runtime-emitted `thread_id` when observed.
 5. Record run and attempt outcomes separately.
 
-Continuation loads and validates the complete ledger plus its atomic projection, creates a new run ID on the same attempt, and invokes `codex exec resume <opaque-id> --json`. The runtime-reported identity must equal the recorded identity. A non-zero exit, missing identity, or changed identity produces `native_resume_unavailable` and never launches a replacement session.
+Continuation loads and validates the ledger plus its atomic projection, creates a new run ID on the same attempt, and invokes `codex exec resume <opaque-id> --json`. A missing saved ID is rejected before process launch. The runtime-reported identity must equal the recorded identity. A non-zero exit, missing identity, or changed identity produces `native_resume_unavailable` with a canonical condition and never launches a replacement session. Parsing archived/not-found/runtime failures remains localized in `dev_pipeline.codex`.
+
+Ledger loading alone permits historical conditionless unavailability events for compatibility. They remain unclassified and inert; strict append validation requires every newly emitted unavailability event to carry a canonical condition.
 
 The Codex boundary durably writes each run's raw stdout JSONL and stderr beneath the attempt state's `diagnostics/` directory, including parser/conflicting-identity exception paths. These files are operator diagnostics, not lifecycle input; adapters and lifecycle projection do not parse them.
 
-Explicit retry uses the ordinary start boundary but writes a caller-selected new state directory with a new attempt/session identity and `attempt_origin=retry_existing_artifacts`. Its `previous_attempt_id` links the immutable prior attempt. This simple layout keeps recovery conservative: missing, corrupt, divergent, or incomplete prior metadata is refused rather than inferred.
+Explicit retry uses the ordinary start boundary but writes a caller-selected new state directory with a new attempt/session identity and `attempt_origin=retry_existing_artifacts`. Its `previous_attempt_id` links the immutable prior attempt. Retry after recorded unavailability uses `retry_reason=native_unavailable`; replacing an available session requires explicit `intentional_replacement`. Corrupt or divergent prior state remains refused rather than inferred.
 
 The native session ID is accepted only from a `thread.started` JSON event. A non-zero process exit or a zero exit without that event fails both the run and current attempt visibly.
 

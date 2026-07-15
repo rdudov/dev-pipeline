@@ -18,6 +18,7 @@ class CodexStartResult:
     stderr: str
     stdout: str = ""
     final_message: str | None = None
+    resume_unavailability: str | None = None
 
 
 def build_owner_prompt(
@@ -81,7 +82,27 @@ def resume_codex_owner(
     if model:
         command.extend(["--model", model])
     command.append("-")
-    return _run_codex(command, repository, prompt, on_process_started, on_session_discovered, diagnostics_prefix)
+    result = _run_codex(
+        command, repository, prompt, on_process_started, on_session_discovered,
+        diagnostics_prefix,
+    )
+    if result.exit_code == 0:
+        return result
+    stderr = result.stderr.lower()
+    if " is archived" in stderr and "unarchive" in stderr:
+        condition = "archived"
+    elif "no rollout found for thread id" in stderr:
+        condition = "not_found"
+    else:
+        condition = "runtime_unavailable"
+    return CodexStartResult(
+        exit_code=result.exit_code,
+        native_session_id=result.native_session_id,
+        stderr=result.stderr,
+        stdout=result.stdout,
+        final_message=result.final_message,
+        resume_unavailability=condition,
+    )
 
 
 def _run_codex(

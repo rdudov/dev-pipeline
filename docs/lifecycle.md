@@ -14,9 +14,11 @@ The ledger is opened with append semantics while an exclusive store lock is held
 
 Run outcome and attempt outcome are distinct. The initial run operation is `native_session_start`, while the attempt origin is `new_owner_session`. These fields are shaped for later continuation without redefining start semantics.
 
-Every attempt records `runtime=codex`. A successful native continuation appends a new `run_id` with `run_operation=native_session_resume` while retaining the attempt and native session IDs. An unavailable continuation leaves the attempt intact and gives the run outcome `native_resume_unavailable`; it does not append another `attempt_started` event.
+Every attempt records `runtime=codex`. A successful native continuation appends a new `run_id` with `run_operation=native_session_resume` while retaining the attempt and native session IDs. An unavailable continuation leaves the attempt intact and gives the run outcome `native_resume_unavailable`; it does not append another `attempt_started` event. Its condition distinguishes missing metadata, archived/not-found native state, runtime unavailability, missing runtime identity, and identity mismatch.
 
-An explicit retry has `attempt_origin=retry_existing_artifacts`, a new attempt ID, an initial `native_session_start` run, and a caller-selected new state directory. `previous_attempt_id` links it to the prior immutable attempt.
+Append-only histories may contain `native_resume_unavailable` events created before the canonical `condition` field existed. They remain readable as legacy/unclassified: the ledger is not rewritten and no condition is inferred from prose. New events must carry a canonical condition, and a legacy/unclassified event cannot authorize automatic retry or any condition-specific action.
+
+An explicit retry has `attempt_origin=retry_existing_artifacts`, a new attempt ID, an initial `native_session_start` run, and a caller-selected new state directory. `previous_attempt_id` links it to the prior immutable attempt; `retry_reason` distinguishes unavailable-state recovery from intentional replacement.
 
 Raw Codex streams are retained per run under `diagnostics/`. They may contain model output and runtime metadata, so operators should protect them like other attempt state. The neutral ledger never derives transitions by reparsing these files.
 

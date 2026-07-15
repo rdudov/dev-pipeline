@@ -60,7 +60,9 @@ dev-pipeline owner retry \
   --state-dir /path/to/new-attempt-state
 ```
 
-Resume never falls back to start. An unavailable session emits `native_resume_unavailable`; retry records `attempt_origin=retry_existing_artifacts`, a new attempt ID, and a new Codex-issued session ID.
+Resume never falls back to start. An unavailable session emits `native_resume_unavailable` with a canonical condition (`missing_session_id`, `archived`, `not_found`, `runtime_unavailable`, `missing_runtime_identity`, or `identity_mismatch`); raw Codex output remains localized in diagnostics. Retry records `attempt_origin=retry_existing_artifacts`, a new attempt ID, and a new Codex-issued session ID. Deliberately replacing an available session requires `--retry-reason intentional_replacement`; after a recorded unavailable run, the reason may be inferred as `native_unavailable`.
+
+Historical conditionless unavailability events remain readable as legacy/unclassified append-only history, but cannot authorize automatic retry or condition-specific behavior. Every newly appended event requires a canonical condition.
 
 ## Scenario and architecture checkpoints
 

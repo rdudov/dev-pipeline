@@ -41,8 +41,14 @@ INTEGER_PAYLOAD_FIELDS = {
     "run_completed": ("exit_code",),
 }
 
+RESUME_UNAVAILABILITY_CONDITIONS = frozenset(
+    {"missing_session_id", "archived", "not_found", "runtime_unavailable", "missing_runtime_identity", "identity_mismatch"}
+)
 
-def validate_event(event: dict[str, Any]) -> dict[str, Any]:
+
+def validate_event(
+    event: dict[str, Any], *, allow_legacy_unclassified_resume: bool = False
+) -> dict[str, Any]:
     """Validate the stable adapter-facing envelope and return it unchanged."""
     required = (
         "schema_version",
@@ -87,4 +93,10 @@ def validate_event(event: dict[str, Any]) -> dict[str, Any]:
                 for field in ("label", "consequence")
             ):
                 raise ValueError("Each decision option requires non-empty label and consequence")
+    if kind == "native_resume_unavailable":
+        condition = event["payload"].get("condition")
+        if condition is None and not allow_legacy_unclassified_resume:
+            raise ValueError("native_resume_unavailable payload requires non-empty condition")
+        if condition is not None and condition not in RESUME_UNAVAILABILITY_CONDITIONS:
+            raise ValueError("native_resume_unavailable payload has unsupported condition")
     return event

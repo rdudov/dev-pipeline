@@ -30,6 +30,7 @@ from .checkpoints import (
 from .lifecycle import LifecycleStore, RunIdentity
 from .increments import achieved_evidence_level, validate_increment
 from .evidence import scenario_branch_digest, validate_evidence_checkpoint
+from .events import RESUME_UNAVAILABILITY_CONDITIONS
 
 
 def emit(event: dict[str, object]) -> None:
@@ -51,7 +52,10 @@ def _validated_inputs(args: argparse.Namespace) -> tuple[Path, Path, list[Path]]
     return repository, instruction_file, artifacts
 
 
-def _run_start(args: argparse.Namespace, *, attempt_origin: str, previous_attempt_id: str | None = None) -> int:
+def _run_start(
+    args: argparse.Namespace, *, attempt_origin: str, previous_attempt_id: str | None = None,
+    retry_reason: str | None = None,
+) -> int:
     repository, instruction_file, artifacts = _validated_inputs(args)
     identity = RunIdentity.create(args.task_ref)
     store = LifecycleStore(args.state_dir)
@@ -67,6 +71,7 @@ def _run_start(args: argparse.Namespace, *, attempt_origin: str, previous_attemp
             "repository": str(repository),
             "worktree": args.worktree,
             **({"previous_attempt_id": previous_attempt_id} if previous_attempt_id else {}),
+            **({"retry_reason": retry_reason} if retry_reason else {}),
         },
     )
     record("run_started", {"run_operation": "native_session_start"})
@@ -118,15 +123,32 @@ def owner_start(args: argparse.Namespace) -> int:
 
 
 def owner_retry(args: argparse.Namespace) -> int:
-    previous_identity, previous = LifecycleStore(args.previous_state_dir).load_attempt()
+    previous_identity, previous = LifecycleStore(args.previous_state_dir).load_attempt(
+        allow_incomplete=True
+    )
     if previous_identity.task_ref != args.task_ref:
         raise ValueError("Previous lifecycle state belongs to a different task")
     if args.state_dir.resolve() == args.previous_state_dir.resolve():
         raise ValueError("Retry requires a new state directory so the prior attempt remains immutable")
+    prior_run = previous.get("run", {})
+    prior_unavailable = (
+        prior_run.get("outcome") == "native_resume_unavailable"
+        and prior_run.get("condition") in RESUME_UNAVAILABILITY_CONDITIONS
+    )
+    retry_reason = args.retry_reason or ("native_unavailable" if prior_unavailable else None)
+    if retry_reason == "native_unavailable" and not prior_unavailable:
+        raise ValueError(
+            "--retry-reason native_unavailable requires a prior classified unavailable run"
+        )
+    if retry_reason is None:
+        raise ValueError(
+            "Replacing an available native session requires --retry-reason intentional_replacement"
+        )
     return _run_start(
         args,
         attempt_origin="retry_existing_artifacts",
         previous_attempt_id=previous["attempt"]["attempt_id"],
+        retry_reason=retry_reason,
     )
 
 
@@ -136,7 +158,7 @@ def owner_resume(args: argparse.Namespace) -> int:
     if not repository.is_dir() or not instruction_file.is_file():
         raise ValueError("Resume repository and instruction file must exist")
     store = LifecycleStore(args.state_dir)
-    prior_identity, state = store.load_attempt()
+    prior_identity, state = store.load_attempt(allow_incomplete=True)
     attempt = state["attempt"]
     if prior_identity.task_ref != args.task_ref:
         raise ValueError("Lifecycle state belongs to a different task")
@@ -153,7 +175,14 @@ def owner_resume(args: argparse.Namespace) -> int:
         + "\n\nContinuation instruction:\n"
         + instruction_file.read_text(encoding="utf-8")
     )
-    expected_session = attempt["native_session_id"]
+    expected_session = attempt.get("native_session_id")
+    if not expected_session:
+        reason = "Codex native session metadata is missing"
+        record("native_resume_unavailable", {
+            "reason": reason, "condition": "missing_session_id",
+        })
+        print(reason, file=sys.stderr)
+        return 1
     try:
         result = resume_codex_owner(
             codex_bin=args.codex_bin,
@@ -178,7 +207,10 @@ def owner_resume(args: argparse.Namespace) -> int:
             reason = "Codex resume emitted no native session identifier"
         else:
             reason = "Codex resume returned a different native session identifier"
-        record("native_resume_unavailable", {"reason": reason})
+        condition = result.resume_unavailability or (
+            "missing_runtime_identity" if result.native_session_id is None else "identity_mismatch"
+        )
+        record("native_resume_unavailable", {"reason": reason, "condition": condition})
         if result.stderr:
             print(result.stderr.rstrip(), file=sys.stderr)
         return 1
@@ -507,6 +539,10 @@ def build_parser() -> argparse.ArgumentParser:
     retry = owner_commands.add_parser("retry", help="Start a new attempt over existing artifacts")
     add_start_arguments(retry)
     retry.add_argument("--previous-state-dir", required=True, type=Path)
+    retry.add_argument(
+        "--retry-reason", choices=("native_unavailable", "intentional_replacement"),
+        help="Required when deliberately replacing an available native session",
+    )
     retry.set_defaults(handler=owner_retry)
     checkpoint = commands.add_parser("checkpoint", help="Apply an owner checkpoint contract")
     checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_type", required=True)

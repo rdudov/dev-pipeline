@@ -57,6 +57,7 @@ def validate_increment(value: Any) -> dict[str, Any]:
         raise ValueError("Increment checkpoint requires a temporary_seams list")
     for seam in seams:
         item = _object(seam, "Temporary seam")
+        _string(item, "id", "Temporary seam")
         _string(item, "name", "Temporary seam")
         if item.get("kind") not in SEAM_KINDS:
             raise ValueError("Temporary seam kind must be stub or temporary_adapter")
@@ -64,6 +65,28 @@ def validate_increment(value: Any) -> dict[str, Any]:
             raise ValueError("Temporary seam boundary must be new_boundary or unavailable_external")
         _string(item, "reason", "Temporary seam")
         _string(item, "replacement_milestone", "Temporary seam")
+        replacement_sequence = _positive_integer(
+            item, "replacement_increment", "Temporary seam"
+        )
+        if replacement_sequence <= sequence:
+            raise ValueError("Temporary seam replacement_increment must be a later increment")
+
+    seam_ids = [item["id"] for item in seams]
+    if len(set(seam_ids)) != len(seam_ids):
+        raise ValueError("Temporary seam ids must be unique")
+
+    retired_seams = record.get("retired_seams", [])
+    if not isinstance(retired_seams, list):
+        raise ValueError("Increment checkpoint retired_seams must be a list")
+    retired_ids: list[str] = []
+    for seam in retired_seams:
+        item = _object(seam, "Retired seam")
+        retired_id = _string(item, "id", "Retired seam")
+        if retired_id in retired_ids:
+            raise ValueError(f"Duplicate retired seam id: {retired_id}")
+        retired_ids.append(retired_id)
+        _string(item, "removal", "Retired seam")
+        _string(item, "evidence_id", "Retired seam")
 
     gate = _object(record.get("evidence_gate"), "Evidence gate")
     required_level = gate.get("required_level")
@@ -129,6 +152,12 @@ def validate_increment(value: Any) -> dict[str, Any]:
     uncovered_failures = [item for item in failure_mode_ids if item not in covered_failures]
     if uncovered_failures:
         raise ValueError(f"Required evidence does not cover failure mode: {uncovered_failures[0]}")
+    for seam in retired_seams:
+        evidence_item = evidence_by_id.get(seam["evidence_id"])
+        if evidence_item is None:
+            raise ValueError(f"Retired seam references unknown evidence: {seam['evidence_id']}")
+        if evidence_item["result"] != "passed" or not evidence_item["real_entrypoint"]:
+            raise ValueError("Retired seam evidence must pass through a real entrypoint")
     return record
 
 

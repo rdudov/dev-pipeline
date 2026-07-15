@@ -95,7 +95,9 @@ dev-pipeline increment submit \
   --input /path/to/increment-1.json
 ```
 
-The first increment must be `walking_skeleton`; later increments must be `vertical_increment`. Each maps named scenarios and failure modes to required evidence, records source/deletion deltas, and identifies temporary seams. Stubs and temporary adapters are permitted only at a `new_boundary` or `unavailable_external` boundary and require a replacement milestone.
+The first increment must be `walking_skeleton`; later increments must be `vertical_increment`. Each maps named scenarios and failure modes to required evidence, records source/deletion deltas, and identifies temporary seams. Stubs and temporary adapters are permitted only at a `new_boundary` or `unavailable_external` boundary. Each has a stable ID and later replacement increment; advancement at that milestone requires recorded removal backed by passed real-entrypoint evidence.
+
+Legacy seam-bearing artifacts without those canonical fields are rejected without inference or rewriting. Historical seam-free increment artifacts remain compatible.
 
 Evidence levels are ordered `structural`, `unit`, `skeleton`, `integrated`, `live`, and `deployed`. Structural and unit evidence may support development but cannot satisfy an increment gate. The walking skeleton requires at least real-entrypoint skeleton evidence; vertical increments require at least integrated evidence. Every named scenario and failure mode must be covered by passing required evidence.
 

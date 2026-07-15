@@ -35,6 +35,7 @@ def increment(sequence=1, kind="walking_skeleton", level="skeleton"):
         "source_delta": ["dev_pipeline CLI and lifecycle"],
         "deletion_performed": ["No superseded increment path exists"],
         "temporary_seams": [],
+        "retired_seams": [],
         "evidence_gate": {"required_level": level, "required_evidence_ids": ["E-1"]},
         "evidence": [{
             "id": "E-1", "level": level, "description": "Installed CLI evidence",
@@ -180,11 +181,30 @@ def test_vertical_increment_requires_integrated_or_stronger_evidence():
 def test_temporary_seam_requires_allowed_boundary_and_replacement_milestone():
     value = increment()
     value["temporary_seams"] = [{
-        "name": "fake existing integration", "kind": "stub", "boundary": "existing_component",
-        "reason": "convenient", "replacement_milestone": "later",
+        "id": "SEAM-1", "name": "fake existing integration", "kind": "stub",
+        "boundary": "existing_component", "reason": "convenient",
+        "replacement_milestone": "increment 2", "replacement_increment": 2,
     }]
     with pytest.raises(ValueError, match="new_boundary or unavailable_external"):
         validate_increment(value)
+
+
+def test_legacy_seam_artifact_is_rejected_without_inference_or_rewrite():
+    value = increment()
+    legacy_seam = {
+        "name": "historical placeholder", "kind": "stub", "boundary": "new_boundary",
+        "reason": "old schema", "replacement_milestone": "later",
+    }
+    value["temporary_seams"] = [legacy_seam.copy()]
+    with pytest.raises(ValueError, match="requires non-empty id"):
+        validate_increment(value)
+    assert value["temporary_seams"] == [legacy_seam]
+
+
+def test_historical_seam_free_artifact_remains_compatible_without_retired_seams():
+    value = increment()
+    value.pop("retired_seams")
+    assert validate_increment(value) == value
 
 
 def test_real_cli_requires_approved_review_before_increment_completion(tmp_path):
@@ -251,6 +271,86 @@ def test_real_cli_accepts_reviewed_skeleton_then_allows_vertical_increment(tmp_p
         "--input", str(second),
     )
     assert submitted.returncode == 0, submitted.stderr
+
+
+def test_allowed_temporary_seam_must_be_removed_by_its_replacement_increment(tmp_path):
+    state = tmp_path / "state"
+    prepared_state(state)
+    first_value = increment()
+    first_value["temporary_seams"] = [{
+        "id": "SEAM-NEW-BOUNDARY", "name": "new delivery boundary placeholder",
+        "kind": "temporary_adapter", "boundary": "new_boundary",
+        "reason": "The downstream boundary is introduced in the next vertical increment",
+        "replacement_milestone": "Vertical increment 2 integrates the real boundary",
+        "replacement_increment": 2,
+    }]
+    first = tmp_path / "increment-1.json"
+    first.write_text(json.dumps(first_value))
+    assert run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(first),
+    ).returncode == 0
+    contract, evidence_checkpoint = closure_files(tmp_path, state)
+    packet, decision = review_files(
+        tmp_path, first, contract=contract, evidence_checkpoint=evidence_checkpoint,
+    )
+    accepted = run_cli(
+        "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(first), "--packet", str(packet), "--decision", str(decision),
+        "--next-step", "Replace the temporary boundary", "--task-contract", str(contract),
+        "--evidence-checkpoint", str(evidence_checkpoint),
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    second_value = increment(2, "vertical_increment", "integrated")
+    second = tmp_path / "increment-2.json"
+    second.write_text(json.dumps(second_value))
+    overdue = run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(second),
+    )
+    assert overdue.returncode == 2
+    assert "reached its replacement milestone: SEAM-NEW-BOUNDARY" in overdue.stderr
+
+    second_value["retired_seams"] = [{
+        "id": "SEAM-NEW-BOUNDARY",
+        "removal": "Removed the temporary adapter and traversed the integrated boundary",
+        "evidence_id": "E-1",
+    }]
+    second.write_text(json.dumps(second_value))
+    assert run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(second),
+    ).returncode == 0
+    packet, decision = review_files(
+        tmp_path, second, contract=contract, evidence_checkpoint=evidence_checkpoint,
+    )
+    accepted = run_cli(
+        "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(second), "--packet", str(packet), "--decision", str(decision),
+        "--next-step", "Continue without temporary seams", "--task-contract", str(contract),
+        "--evidence-checkpoint", str(evidence_checkpoint),
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    snapshot = json.loads((state / "state.json").read_text())
+    assert snapshot["increments"]["1"]["temporary_seams"][0]["id"] == "SEAM-NEW-BOUNDARY"
+    assert snapshot["increments"]["2"]["retired_seams"][0]["id"] == "SEAM-NEW-BOUNDARY"
+
+    third_value = increment(3, "vertical_increment", "integrated")
+    third_value["temporary_seams"] = [{
+        "id": "SEAM-NEW-BOUNDARY", "name": "reused identity",
+        "kind": "temporary_adapter", "boundary": "new_boundary",
+        "reason": "incorrectly recycling a retired seam identity",
+        "replacement_milestone": "Vertical increment 4", "replacement_increment": 4,
+    }]
+    third = tmp_path / "increment-3.json"
+    third.write_text(json.dumps(third_value))
+    redeclared = run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(third),
+    )
+    assert redeclared.returncode == 2
+    assert "seam id was already declared: SEAM-NEW-BOUNDARY" in redeclared.stderr
 
 
 def test_next_increment_is_blocked_while_prior_review_is_pending(tmp_path):

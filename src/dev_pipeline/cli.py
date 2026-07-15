@@ -360,6 +360,34 @@ def _increment_prerequisites(checkpoint: dict[str, object], state: dict[str, obj
     future = [int(item) for item in increments if int(item) > sequence]
     if future:
         raise ValueError("Cannot revise an increment after a later increment exists")
+    open_seams: dict[str, dict[str, object]] = {}
+    historical_seam_ids: set[str] = set()
+    for increment_sequence in sorted(int(item) for item in increments if int(item) < sequence):
+        prior_increment = increments[str(increment_sequence)]
+        if prior_increment.get("status") != "completed":
+            continue
+        for seam in prior_increment.get("temporary_seams", []):
+            historical_seam_ids.add(seam["id"])
+            open_seams[seam["id"]] = seam
+        for retired in prior_increment.get("retired_seams", []):
+            open_seams.pop(retired["id"], None)
+    declared_ids = {item["id"] for item in checkpoint.get("temporary_seams", [])}
+    overlap = declared_ids & historical_seam_ids
+    if overlap:
+        raise ValueError(f"Temporary seam id was already declared: {sorted(overlap)[0]}")
+    retired_ids = {item["id"] for item in checkpoint.get("retired_seams", [])}
+    unknown = retired_ids - set(open_seams)
+    if unknown:
+        raise ValueError(f"Cannot retire an unknown temporary seam: {sorted(unknown)[0]}")
+    due = {
+        seam_id for seam_id, seam in open_seams.items()
+        if seam["replacement_increment"] <= sequence
+    }
+    overdue = due - retired_ids
+    if overdue:
+        raise ValueError(
+            f"Temporary seam reached its replacement milestone: {sorted(overdue)[0]}"
+        )
 
 
 def increment_submit(args: argparse.Namespace) -> int:
@@ -380,6 +408,8 @@ def increment_submit(args: argparse.Namespace) -> int:
         "artifact_digest": artifact_digest(artifact),
         "scenario_ids": checkpoint["scenario_ids"],
         "evidence_level": achieved_evidence_level(checkpoint),
+        "temporary_seams": checkpoint["temporary_seams"],
+        "retired_seams": checkpoint.get("retired_seams", []),
     })
     emit(event)
     return 0
@@ -441,6 +471,8 @@ def increment_accept(args: argparse.Namespace) -> int:
         "review_artifact_digest": packet["artifact"]["digest"],
         "scenario_ids": checkpoint["scenario_ids"],
         "evidence_level": achieved_evidence_level(checkpoint),
+        "temporary_seams": checkpoint["temporary_seams"],
+        "retired_seams": checkpoint.get("retired_seams", []),
         "next_step": args.next_step,
     })
     emit(event)

@@ -13,7 +13,11 @@ Every increment names its sequence and kind, binds the completed scenario and ar
 
 Sequence 1 is the `walking_skeleton`. It must traverse a real entrypoint and require at least `skeleton` evidence. Sequences after 1 are `vertical_increment` and require at least `integrated` evidence.
 
-Temporary seam kinds are `stub` and `temporary_adapter`. Their boundary must be `new_boundary` or `unavailable_external`; an existing exercisable integration cannot be reclassified as a permitted seam. Every seam has an explicit replacement milestone.
+Temporary seam kinds are `stub` and `temporary_adapter`. Their boundary must be `new_boundary` or `unavailable_external`; an existing exercisable integration cannot be reclassified as a permitted seam. Every seam has a stable `id`, an explicit human-readable replacement milestone, and a later numeric `replacement_increment`.
+
+Completed increment state carries open seams forward. At or before the replacement increment, a later checkpoint must list the seam in `retired_seams`, describe the removal, and bind it to passed real-entrypoint evidence from that increment. Advancement at the milestone is rejected when the seam is not retired; unknown, duplicate, or redeclared seam IDs are also rejected.
+
+Compatibility is fail-closed for historical seam-bearing artifacts: a temporary seam without the canonical stable `id` or `replacement_increment` is rejected at validation, and neither value is inferred from its prose or written back. Historical seam-free artifacts remain valid because `retired_seams` defaults to an empty list.
 
 ## Evidence levels
 

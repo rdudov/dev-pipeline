@@ -16,6 +16,8 @@ PACKS: dict[str, dict[str, Any]] = {
         "Stop on material product semantics; label only reversible assumptions.",
         "Prefer the existing owning component and do not create a parallel mechanism.",
         "Structured decisions and durable artifacts are state; prose cannot override them.",
+        "Preserve adjacent existing behavior unless the accepted contract explicitly authorizes its change; unresolved compatibility or policy expansion is a blocker.",
+        "Keep task, review, verification, and evidence artifacts in the owning task directory, never in the target repository.",
     ], "provenance": ["00_agent_development.md: uncertainty/open questions", "01_orchestrator.md: bounded context"]},
     "discovery": {"rules": [
         "Build the complete cross-cutting dependency inventory before proposing a solution: source and sibling repositories, runtime entrypoints and services, containers and host identities, configuration and secrets, durable storage, backup/restore/retention, deployment/update/rollback, observability, network, scheduled jobs, and external integrations.",
@@ -39,7 +41,7 @@ PACKS: dict[str, dict[str, Any]] = {
     ], "provenance": ["06_agent_planner.md", "06a_agent_planning_repair.md", "07_agent_plan_reviewer.md", "08_agent_developer.md"]},
     "diff_review": {"rules": [
         "Review only the concrete diff against requirements, owning architecture, regressions, tests, and docs.",
-        "Flag duplicate mechanisms, test-only production paths, swallowed errors, and unrelated scope.",
+        "Flag duplicate mechanisms, test-only production paths, swallowed errors, unrelated scope, adjacent semantic changes, and task artifacts written into the target repository.",
         "Require evidence references for findings and use the canonical structured decision envelope.",
     ], "provenance": ["08a_agent_implementation_repair.md", "09_agent_code_reviewer.md: concrete review"]},
     "live": {"rules": [

@@ -36,6 +36,8 @@ The command emits neutral lifecycle JSONL to stdout and stores `events.jsonl` pl
 
 The first attempt always has `attempt_origin=new_owner_session`; the first run always has `run_operation=native_session_start`. A successful start requires a `thread.started` event from Codex. The pipeline never fabricates a native session ID from a process ID or filename.
 
+The owner prompt preserves adjacent production behavior unless the accepted contract explicitly changes it. Compatibility, fallback, parsing, persistence, or delivery-policy expansion requires a concrete blocker rather than an inferred assumption. Task/review/evidence artifacts remain outside the target repository in the caller-owned artifact directory; evidence checkpoints reject absolute or escaping artifact paths.
+
 ## Continue or retry
 
 Continue the same attempt and opaque Codex session with a new instruction:

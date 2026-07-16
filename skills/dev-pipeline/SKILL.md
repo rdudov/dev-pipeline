@@ -27,4 +27,6 @@ Inspect `dev-pipeline <command> --help` for exact arguments. Read the installed 
 - Machine-facing prompts, schemas, conventions, packets, and decisions are canonical English.
 - Stubs are allowed only at newly introduced or genuinely unavailable boundaries and must be declared and retired.
 - Structural, mock-only, or one-off evidence does not establish live acceptance.
+- Preserve adjacent production behavior unless the accepted contract explicitly authorizes changing it. Treat a proposed compatibility, fallback, parsing, persistence, or delivery-policy expansion as a blocking question, not a reversible implementation assumption.
+- Store task, review, verification, and evidence artifacts in the owning task directory. Never create pipeline state, `task-artifacts/`, findings, or verification logs inside the target repository.
 - Keep transport credentials, local task history, and product-specific notification policy outside the public pipeline.

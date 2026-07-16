@@ -34,6 +34,17 @@ MATRIX_TRIGGER_INTENTS = frozenset({"file", "data", "document", "media"})
 ARTIFACT_KINDS = frozenset({"behavioral_trace", "runtime_output", "validated_deliverable"})
 
 
+def _bound_evidence_artifact(root: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        raise ValueError("Evidence artifact path must be relative to the owning artifact root")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / path).resolve()
+    if not resolved.is_relative_to(resolved_root):
+        raise ValueError("Evidence artifact path escapes the owning artifact root")
+    return resolved
+
+
 def scenario_branch_digest(branch: dict[str, Any]) -> str:
     contract = {
         key: branch[key] for key in (
@@ -251,9 +262,7 @@ def validate_evidence_checkpoint(
             if ref.get("kind") not in ARTIFACT_KINDS:
                 raise ValueError(f"Evidence {evidence_id} artifact must contain branch behavior")
             if artifact_root is not None:
-                path = Path(path_text)
-                if not path.is_absolute():
-                    path = artifact_root / path
+                path = _bound_evidence_artifact(artifact_root, path_text)
                 if not path.is_file():
                     raise ValueError(f"Evidence artifact does not exist: {path}")
                 if artifact_digest(path) != expected:

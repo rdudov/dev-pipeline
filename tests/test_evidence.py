@@ -211,6 +211,44 @@ def test_mandatory_evidence_truthfulness_rejections(tmp_path, mutation, message)
         validate_evidence_checkpoint(value, artifact_root=tmp_path)
 
 
+def test_evidence_artifact_must_stay_in_owning_artifact_root(tmp_path):
+    value, _, result = checkpoint(tmp_path)
+    value["evidence"][0]["artifacts"][0]["path"] = str(result.resolve())
+    with pytest.raises(ValueError, match="relative to the owning artifact root"):
+        validate_evidence_checkpoint(value, artifact_root=tmp_path)
+
+    outside = tmp_path.parent / "outside-evidence.txt"
+    outside.write_text("outside\n")
+    value["evidence"][0]["artifacts"][0].update(
+        path="../outside-evidence.txt", digest=artifact_digest(outside)
+    )
+    with pytest.raises(ValueError, match="escapes the owning artifact root"):
+        validate_evidence_checkpoint(value, artifact_root=tmp_path)
+
+
+def test_real_cli_rejects_evidence_artifact_in_target_repository(tmp_path):
+    value, contract, result = checkpoint(tmp_path)
+    target_repo = tmp_path / "target-repository"
+    target_repo.mkdir()
+    misplaced = target_repo / "task-artifacts" / "verification.md"
+    misplaced.parent.mkdir()
+    misplaced.write_text("misplaced evidence\n")
+    value["evidence"][0]["artifacts"][0].update(
+        path=str(misplaced), digest=artifact_digest(misplaced)
+    )
+    state = tmp_path / "state"
+    value["scenario_artifact_digest"], value["architecture_artifact_digest"] = prepared_state(state)
+    artifact = tmp_path / "evidence.json"
+    artifact.write_text(json.dumps(value))
+    outcome = run_cli(
+        "checkpoint", "evidence", "--task-ref", "task-1", "--state-dir", str(state),
+        "--input", str(artifact), "--task-contract", str(contract), "--next-step", "review",
+    )
+    assert outcome.returncode == 2
+    assert "relative to the owning artifact root" in outcome.stderr
+    assert result.is_file()
+
+
 @pytest.mark.parametrize(
     "mutation,message",
     [

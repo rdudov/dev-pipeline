@@ -45,6 +45,17 @@ def test_normal_owner_prompt_does_not_aggregate_legacy_roles():
     assert len(prompt) < 2_500
 
 
+def test_owner_prompt_protects_adjacent_semantics_and_task_artifact_boundary():
+    prompt = build_owner_prompt(
+        "task-1", "Change only the named behavior.", [],
+        render_conventions(route_conventions("core", [])),
+    )
+    assert "Preserve adjacent existing behavior" in prompt
+    assert "stop and record a concrete blocking question" in prompt
+    assert "never inside the target repository" in prompt
+    assert "do not create task-artifacts" in prompt
+
+
 def test_every_bounded_role_gets_only_its_gate_and_explicit_risks(tmp_path):
     artifact = tmp_path / "delta.txt"
     artifact.write_text("observable delta")

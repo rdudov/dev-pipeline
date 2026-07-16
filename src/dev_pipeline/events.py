@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 
@@ -47,7 +48,8 @@ RESUME_UNAVAILABILITY_CONDITIONS = frozenset(
 
 
 def validate_event(
-    event: dict[str, Any], *, allow_legacy_unclassified_resume: bool = False
+    event: dict[str, Any], *, allow_legacy_unclassified_resume: bool = False,
+    allow_legacy_optionless_blocker: bool = False,
 ) -> dict[str, Any]:
     """Validate the stable adapter-facing envelope and return it unchanged."""
     required = (
@@ -69,6 +71,12 @@ def validate_event(
     for field in ("event_id", "timestamp", "task_ref", "attempt_id", "run_id", "kind"):
         if not isinstance(event[field], str) or not event[field].strip():
             raise ValueError(f"Lifecycle event {field} must be a non-empty string")
+    try:
+        timestamp = datetime.fromisoformat(event["timestamp"])
+    except ValueError as exc:
+        raise ValueError("Lifecycle event timestamp must be ISO 8601") from exc
+    if timestamp.tzinfo is None:
+        raise ValueError("Lifecycle event timestamp must include a timezone")
     if not isinstance(event["sequence"], int) or isinstance(event["sequence"], bool) or event["sequence"] < 1:
         raise ValueError("Lifecycle event sequence must be a positive integer")
     kind = event["kind"]
@@ -84,10 +92,12 @@ def validate_event(
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"{kind} payload requires non-negative integer {field}")
     options = event["payload"].get("options")
-    if options is not None:
-        if not isinstance(options, list):
-            raise ValueError("blocked_on_user_decision options must be a list")
-        for option in options:
+    if kind == "blocked_on_user_decision":
+        if options is None and allow_legacy_optionless_blocker:
+            pass
+        elif not isinstance(options, list) or not options:
+            raise ValueError("blocked_on_user_decision options must be a non-empty list")
+        for option in options or []:
             if not isinstance(option, dict) or not all(
                 isinstance(option.get(field), str) and option[field].strip()
                 for field in ("label", "consequence")

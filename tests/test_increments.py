@@ -148,6 +148,7 @@ def review_files(
     packet_path = tmp_path / "packet.json"
     packet_path.write_text(json.dumps(packet))
     approved = decision_name == "approved"
+    blocked = decision_name == "blocked"
     decision = {
         "schema_version": "1.0", "review_type": "increment",
         "artifact_digest": packet["artifact"]["digest"], "artifact_version": "1",
@@ -156,7 +157,8 @@ def review_files(
             "id": "F-1", "severity": "major", "summary": "Evidence gap",
             "evidence_ref": "events.jsonl",
         }],
-        "blocking_questions": [], "evidence_checked": ["events.jsonl"],
+        "blocking_questions": ["Which policy applies?"] if blocked else [],
+        "evidence_checked": ["events.jsonl"],
     }
     decision_path = tmp_path / "decision.json"
     decision_path.write_text(json.dumps(decision))
@@ -233,6 +235,37 @@ def test_real_cli_requires_approved_review_before_increment_completion(tmp_path)
     assert "requires approved focused review" in rejected.stderr
     snapshot = json.loads((state / "state.json").read_text())
     assert snapshot["increments"]["1"]["status"] == "ready_for_review"
+
+
+@pytest.mark.parametrize("decision_name", ["blocked", "rejected"])
+def test_nonapproved_review_cannot_advance_increment_lifecycle(tmp_path, decision_name):
+    state = tmp_path / "state"
+    prepared_state(state)
+    artifact = tmp_path / "increment.json"
+    artifact.write_text(json.dumps(increment()))
+    assert run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact),
+    ).returncode == 0
+    ledger_before = (state / "events.jsonl").read_bytes()
+    snapshot_before = (state / "state.json").read_bytes()
+    packet, decision = review_files(tmp_path, artifact, decision_name)
+    unused_contract = tmp_path / "unused-contract.json"
+    unused_evidence = tmp_path / "unused-evidence.json"
+    unused_contract.write_text("{}")
+    unused_evidence.write_text("{}")
+
+    result = run_cli(
+        "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact), "--packet", str(packet), "--decision", str(decision),
+        "--next-step", "next", "--task-contract", str(unused_contract),
+        "--evidence-checkpoint", str(unused_evidence),
+    )
+
+    assert result.returncode == 2
+    assert "requires approved focused review" in result.stderr
+    assert (state / "events.jsonl").read_bytes() == ledger_before
+    assert (state / "state.json").read_bytes() == snapshot_before
 
 
 def test_real_cli_accepts_reviewed_skeleton_then_allows_vertical_increment(tmp_path):

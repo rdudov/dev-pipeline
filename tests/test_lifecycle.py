@@ -105,18 +105,78 @@ def test_event_vocabulary_rejects_incomplete_hitl_payload(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "mutation,message",
+    [
+        (lambda event: event["payload"].pop("artifact"), "non-empty artifact"),
+        (lambda event: event["payload"].pop("options"), "non-empty list"),
+        (lambda event: event["payload"].update(options=[]), "non-empty list"),
+        (lambda event: event["payload"].update(options={}), "non-empty list"),
+        (
+            lambda event: event["payload"].update(
+                options=[{"consequence": "No label is present"}]
+            ),
+            "label and consequence",
+        ),
+        (
+            lambda event: event["payload"].update(options=[{"label": "No consequence"}]),
+            "label and consequence",
+        ),
+    ],
+)
+def test_hitl_payload_rejects_each_malformed_decision_branch(mutation, message):
+    event = valid_event(kind="blocked_on_user_decision")
+    event["payload"] = {
+        "question": "Which safe behavior should apply?",
+        "artifact": "decision.md",
+        "options": [{"label": "Stop", "consequence": "Wait for user direction"}],
+    }
+    mutation(event)
+
+    with pytest.raises(ValueError, match=message):
+        validate_event(event)
+
+
+def valid_event(*, kind="attempt_started"):
+    return {
+        "schema_version": "1.0", "event_id": "event-1", "sequence": 1,
+        "timestamp": "2026-07-14T00:00:00+00:00", "task_ref": "task-1",
+        "attempt_id": "attempt-1", "run_id": "run-1", "kind": kind, "payload": {},
+    }
+
+
+@pytest.mark.parametrize(
     "field,value",
     [("sequence", 0), ("schema_version", "2.0"), ("task_ref", 7)],
 )
 def test_event_envelope_rejects_invalid_types(field, value):
-    event = {
-        "schema_version": "1.0", "event_id": "event-1", "sequence": 1,
-        "timestamp": "2026-07-14T00:00:00+00:00", "task_ref": "task-1",
-        "attempt_id": "attempt-1", "run_id": "run-1", "kind": "attempt_started", "payload": {},
-    }
+    event = valid_event()
     event[field] = value
 
     with pytest.raises(ValueError):
+        validate_event(event)
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("attempt_id", 7, "attempt_id"),
+        ("run_id", 7, "run_id"),
+        ("event_id", 7, "event_id"),
+        ("kind", 7, "kind"),
+        ("kind", "unknown_event", "Unsupported lifecycle event kind"),
+        ("timestamp", 7, "timestamp"),
+        ("timestamp", "not-a-timestamp", "ISO 8601"),
+        ("timestamp", "2026-07-14T00:00:00", "timezone"),
+        ("payload", [], "payload must be an object"),
+    ],
+)
+def test_event_envelope_rejects_each_malformed_identity_and_time_branch(
+    field, value, message,
+):
+    event = valid_event()
+    event[field] = value
+
+    with pytest.raises(ValueError, match=message):
         validate_event(event)
 
 
@@ -139,6 +199,40 @@ def test_conditionless_resume_unavailability_is_legacy_read_only(tmp_path):
     with pytest.raises(ValueError, match="requires non-empty condition"):
         validate_event(event)
     assert validate_event(event, allow_legacy_unclassified_resume=True) == event
+
+
+def test_optionless_blocker_is_legacy_read_only_and_not_projected_as_actionable(tmp_path):
+    store = _resumable_store(tmp_path)
+    identity, _ = store.load_attempt()
+    legacy = valid_event(kind="blocked_on_user_decision")
+    legacy.update(
+        sequence=3, task_ref=identity.task_ref,
+        attempt_id=identity.attempt_id, run_id=identity.run_id,
+    )
+    legacy["payload"] = {"question": "Old question", "artifact": "old.md"}
+    with store.ledger_path.open("a", encoding="utf-8") as ledger:
+        ledger.write(json.dumps(legacy) + "\n")
+    snapshot = store._project(json.loads(line) for line in store.ledger_path.read_text().splitlines())
+    historical_snapshot = dict(snapshot)
+    historical_snapshot["active_blocker"] = legacy["payload"]
+    store._write_snapshot_unlocked(historical_snapshot)
+
+    with pytest.raises(ValueError, match="non-empty list"):
+        validate_event(legacy)
+    assert validate_event(legacy, allow_legacy_optionless_blocker=True) == legacy
+    _, loaded = store.load_attempt()
+    assert "active_blocker" not in loaded
+    assert json.loads(store.snapshot_path.read_text())["active_blocker"] == legacy["payload"]
+
+
+def test_legacy_optionless_compatibility_does_not_accept_fabricated_snapshot_blocker(tmp_path):
+    store = _resumable_store(tmp_path)
+    snapshot = json.loads(store.snapshot_path.read_text())
+    snapshot["active_blocker"] = {"question": "Fabricated", "artifact": "fake.md"}
+    store.snapshot_path.write_text(json.dumps(snapshot))
+
+    with pytest.raises(RuntimeError, match="snapshot diverges"):
+        store.load_attempt()
 
 
 def _resumable_store(tmp_path):

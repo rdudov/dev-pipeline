@@ -104,13 +104,23 @@ class LifecycleStore:
             if not events:
                 raise RuntimeError("Lifecycle state has no attempt to continue")
             for event in events:
-                validate_event(event, allow_legacy_unclassified_resume=True)
+                validate_event(
+                    event,
+                    allow_legacy_unclassified_resume=True,
+                    allow_legacy_optionless_blocker=True,
+                )
             snapshot = self._project(events)
             if not self.snapshot_path.is_file():
                 raise RuntimeError("Lifecycle state snapshot is missing; refusing ambiguous continuation")
             persisted = json.loads(self.snapshot_path.read_text(encoding="utf-8"))
             if persisted != snapshot:
-                raise RuntimeError("Lifecycle state snapshot diverges from its ledger; refusing continuation")
+                historical_projection = self._project(
+                    events, include_legacy_optionless_blockers=True
+                )
+                if persisted != historical_projection:
+                    raise RuntimeError(
+                        "Lifecycle state snapshot diverges from its ledger; refusing continuation"
+                    )
             attempt = snapshot["attempt"]
             required = ("attempt_id", "runtime", "repository", "native_session_id")
             missing = [field for field in required if not attempt.get(field)]
@@ -168,7 +178,9 @@ class LifecycleStore:
                 os.unlink(temporary_name)
 
     @staticmethod
-    def _project(events: list[dict[str, Any]]) -> dict[str, Any]:
+    def _project(
+        events: list[dict[str, Any]], *, include_legacy_optionless_blockers: bool = False
+    ) -> dict[str, Any]:
         snapshot: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "last_sequence": 0,
@@ -223,7 +235,10 @@ class LifecycleStore:
                 if blocker.get("checkpoint") == payload["checkpoint"]:
                     snapshot.pop("active_blocker", None)
             elif event["kind"] == "blocked_on_user_decision":
-                snapshot["active_blocker"] = payload
+                # Historical schema-1.0 optionless blockers remain readable records,
+                # but cannot become actionable projected decision state.
+                if payload.get("options") or include_legacy_optionless_blockers:
+                    snapshot["active_blocker"] = payload
             elif event["kind"] == "increment_ready_for_review":
                 snapshot.setdefault("increments", {})[payload["increment"]] = {
                     **payload,

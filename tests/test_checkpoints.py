@@ -163,6 +163,13 @@ def test_real_cli_blocks_material_semantics_before_checkpoint_completion(tmp_pat
     assert "scenario" not in snapshot.get("checkpoints", {})
 
 
+def test_checkpoint_rejects_optionless_question_before_lifecycle_append():
+    value = scenario(questions=[{"question": "Which policy applies?", "options": []}])
+
+    with pytest.raises(ValueError, match="options must be a non-empty list"):
+        validate_scenario_checkpoint(value)
+
+
 def test_real_cli_accepts_complete_architecture_through_lifecycle_entrypoint(tmp_path):
     state = tmp_path / "state"
     completed_store(state)
@@ -238,6 +245,10 @@ def test_completing_other_checkpoint_does_not_clear_active_blocker(tmp_path):
     })
     store.append(identity, "blocked_on_user_decision", {
         "question": "Choose rollout policy", "artifact": "scenario.json", "checkpoint": "scenario",
+        "options": [{
+            "label": "Keep opt-in",
+            "consequence": "The existing default remains unchanged",
+        }],
     })
     store.append(identity, "checkpoint_completed", {
         "checkpoint": "architecture", "artifact": "architecture.json",
@@ -312,3 +323,57 @@ def test_real_cli_returns_nonzero_for_valid_rework_decision(tmp_path):
     )
     assert result.returncode == 4
     assert json.loads(result.stdout)["decision"] == "rework_required"
+
+
+@pytest.mark.parametrize(
+    "decision_value,blocking_questions",
+    [
+        ("blocked", ["Which compatibility policy should apply?"]),
+        ("rejected", []),
+    ],
+)
+def test_real_cli_keeps_valid_nonapproved_decisions_nonadvancing(
+    tmp_path, decision_value, blocking_questions,
+):
+    artifact = tmp_path / "scenario.json"
+    artifact.write_text(json.dumps(scenario()))
+    packet = build_review_packet(
+        review_type="scenario", artifact=artifact, artifact_version="3", question="Approve?",
+        constraints=["Do not invent policy"], instructions=["Review the checkpoint"],
+        evidence=[], exclusions=["Increment orchestration"],
+    )
+    packet_path = tmp_path / "packet.json"
+    packet_path.write_text(json.dumps(packet))
+    decision_path = tmp_path / "decision.json"
+    decision_path.write_text(json.dumps({
+        "schema_version": "1.0", "review_type": "scenario",
+        "artifact_digest": packet["artifact"]["digest"], "artifact_version": "3",
+        "decision": decision_value, "findings": [],
+        "blocking_questions": blocking_questions, "evidence_checked": ["scenario.json"],
+    }))
+
+    result = run_cli(
+        "review", "decision", "--packet", str(packet_path), "--decision", str(decision_path),
+    )
+
+    assert result.returncode == 4
+    assert json.loads(result.stdout)["decision"] == decision_value
+
+
+def test_blocked_decision_without_question_is_rejected(tmp_path):
+    artifact = tmp_path / "scenario.json"
+    artifact.write_text(json.dumps(scenario()))
+    packet = build_review_packet(
+        review_type="scenario", artifact=artifact, artifact_version="3", question="Approve?",
+        constraints=["Do not invent policy"], instructions=["Review the checkpoint"],
+        evidence=[], exclusions=["Increment orchestration"],
+    )
+    decision = {
+        "schema_version": "1.0", "review_type": "scenario",
+        "artifact_digest": packet["artifact"]["digest"], "artifact_version": "3",
+        "decision": "blocked", "findings": [], "blocking_questions": [],
+        "evidence_checked": [],
+    }
+
+    with pytest.raises(ValueError, match="requires a blocking question"):
+        validate_decision(decision, packet)

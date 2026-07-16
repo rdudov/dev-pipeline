@@ -65,9 +65,9 @@ def _questions(record: dict[str, Any], label: str) -> list[dict[str, Any]]:
     for question in questions:
         item = _object(question, f"{label} blocking question")
         _string(item, "question", f"{label} blocking question")
-        options = item.get("options", [])
-        if not isinstance(options, list):
-            raise ValueError(f"{label} blocking question options must be a list")
+        options = item.get("options")
+        if not isinstance(options, list) or not options:
+            raise ValueError(f"{label} blocking question options must be a non-empty list")
         for option in options:
             option = _object(option, f"{label} question option")
             _string(option, "label", f"{label} question option")

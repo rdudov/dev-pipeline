@@ -27,14 +27,20 @@ Raw Codex streams are retained per run under `diagnostics/`. They may contain mo
 Every event uses the same versioned envelope. The canonical kinds are owner/run
 start and terminal events plus `checkpoint_completed`, `increment_completed`,
 and `blocked_on_user_decision`. Checkpoint and increment events name the completed
-unit and `next_step`. A blocker carries a concrete `question` and may include
-structured `options` (`label` and `consequence`) plus an `artifact` reference.
+unit and `next_step`. A blocker carries a concrete `question`, a non-empty list of
+structured `options` (`label` and `consequence`), and an `artifact` reference.
 Failures carry a `reason`.
 
 The validator requires schema version `1.0`, non-empty string identities, a
-positive integer sequence, object payloads, kind-specific required strings, and
-typed decision options. A decision blocker always points to its relevant
-artifact; options are included when the owner has concrete alternatives.
+positive integer sequence, a timezone-aware ISO 8601 timestamp, object payloads,
+kind-specific required strings, and typed decision options. A decision blocker
+always points to its relevant artifact and supplies concrete alternatives with
+their consequences.
+
+Append-only histories may contain schema-`1.0` blocker events written before
+options became mandatory. They remain readable as legacy/optionless records, are
+never rewritten, and are not projected as an actionable blocker. No options are
+inferred from prose. Every newly appended blocker must include canonical options.
 
 These events are transport-neutral. Product adapters decide which transitions
 are worth notifying, resolve authorized destinations, and handle delivery

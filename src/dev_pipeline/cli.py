@@ -31,6 +31,7 @@ from .lifecycle import LifecycleStore, RunIdentity
 from .increments import achieved_evidence_level, validate_increment
 from .evidence import scenario_branch_digest, validate_evidence_checkpoint
 from .events import RESUME_UNAVAILABILITY_CONDITIONS
+from .deployment import deployment_impact_digest, validate_deployment_checkpoint
 
 
 def emit(event: dict[str, object]) -> None:
@@ -235,6 +236,8 @@ def checkpoint_apply(args: argparse.Namespace) -> int:
         checkpoint = validate_scenario_checkpoint(value)
     elif args.checkpoint_type == "architecture":
         checkpoint = validate_architecture_checkpoint(value)
+    elif args.checkpoint_type == "deployment":
+        checkpoint = validate_deployment_checkpoint(value, artifact_root=artifact.parent)
     else:
         checkpoint = validate_evidence_checkpoint(value, artifact_root=artifact.parent)
     store = LifecycleStore(args.state_dir)
@@ -299,6 +302,37 @@ def checkpoint_apply(args: argparse.Namespace) -> int:
         missing = required_ids - subject_ids
         if missing:
             raise ValueError(f"Evidence checkpoint omits task-contract evidence: {sorted(missing)[0]}")
+    if args.checkpoint_type == "deployment":
+        increment = args.increment.resolve()
+        evidence = args.evidence_checkpoint.resolve()
+        if not increment.is_file() or artifact_digest(increment) != checkpoint["increment_artifact_digest"]:
+            raise ValueError("Deployment checkpoint increment digest does not match")
+        increment_value = _read_json(increment)
+        if deployment_impact_digest(increment_value) != checkpoint["increment_deployment_impacts_digest"]:
+            raise ValueError("Deployment checkpoint resource applicability does not match the increment")
+        increment_impacts = {
+            item["kind"]: item["applicability"] for item in increment_value["deployment_impacts"]
+        }
+        deployment_impacts = {
+            item["kind"]: item["applicability"] for item in checkpoint["resources"]
+        }
+        if increment_impacts != deployment_impacts:
+            raise ValueError("Deployment checkpoint resource applicability differs from the increment")
+        if not evidence.is_file() or artifact_digest(evidence) != checkpoint["evidence_checkpoint_digest"]:
+            raise ValueError("Deployment checkpoint evidence digest does not match")
+        evidence_state = state.get("checkpoints", {}).get("evidence", {})
+        if evidence_state.get("status") != "completed" or evidence_state.get("artifact_digest") != checkpoint["evidence_checkpoint_digest"]:
+            raise ValueError("Deployment checkpoint requires the completed evidence checkpoint")
+        for name, field in (
+            ("scenario", "scenario_artifact_digest"),
+            ("architecture", "architecture_artifact_digest"),
+        ):
+            prior = state.get("checkpoints", {}).get(name, {})
+            if prior.get("status") != "completed" or prior.get("artifact_digest") != checkpoint[field]:
+                raise ValueError(f"Deployment checkpoint {name} digest does not match lifecycle state")
+            prior_path = Path(str(prior.get("artifact", "")))
+            if not prior_path.is_file() or artifact_digest(prior_path) != checkpoint[field]:
+                raise ValueError(f"Deployment checkpoint {name} artifact is missing or stale")
     questions = checkpoint.get("blocking_questions", [])
     if questions:
         first = questions[0]
@@ -463,6 +497,31 @@ def increment_accept(args: argparse.Namespace) -> int:
     pending = state.get("increments", {}).get(str(checkpoint["sequence"]), {})
     if pending.get("status") != "ready_for_review" or pending.get("artifact_digest") != digest:
         raise ValueError("Increment artifact is not the current submitted review candidate")
+    if achieved_evidence_level(checkpoint) == "deployed":
+        if args.deployment_checkpoint is None:
+            raise ValueError("Deployed increment acceptance requires a deployment checkpoint")
+        deployment_path = args.deployment_checkpoint.resolve()
+        deployment = validate_deployment_checkpoint(
+            _read_json(deployment_path), artifact_root=deployment_path.parent
+        )
+        deployment_state = state.get("checkpoints", {}).get("deployment", {})
+        if (
+            deployment_state.get("status") != "completed"
+            or deployment_state.get("artifact_digest") != artifact_digest(deployment_path)
+            or deployment["increment_artifact_digest"] != digest
+            or deployment["evidence_checkpoint_digest"] != artifact_digest(evidence_path)
+            or deployment["applicability"] != "applicable"
+        ):
+            raise ValueError("Deployed increment acceptance requires the current completed deployment checkpoint")
+        if deployment_impact_digest(checkpoint) != deployment["increment_deployment_impacts_digest"]:
+            raise ValueError("Deployed increment applicability binding is stale")
+        for name, field in (
+            ("scenario", "scenario_artifact_digest"),
+            ("architecture", "architecture_artifact_digest"),
+        ):
+            prior = state.get("checkpoints", {}).get(name, {})
+            if prior.get("status") != "completed" or prior.get("artifact_digest") != deployment[field]:
+                raise ValueError(f"Deployed increment {name} applicability binding is stale")
     event = store.append(identity, "increment_completed", {
         "increment": str(checkpoint["sequence"]),
         "increment_kind": checkpoint["increment_kind"],
@@ -581,7 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
     retry.set_defaults(handler=owner_retry)
     checkpoint = commands.add_parser("checkpoint", help="Apply an owner checkpoint contract")
     checkpoint_commands = checkpoint.add_subparsers(dest="checkpoint_type", required=True)
-    for checkpoint_type in ("scenario", "architecture", "evidence"):
+    for checkpoint_type in ("scenario", "architecture", "evidence", "deployment"):
         command = checkpoint_commands.add_parser(checkpoint_type)
         command.add_argument("--task-ref", required=True)
         command.add_argument("--state-dir", required=True, type=Path)
@@ -589,6 +648,9 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--next-step", required=True)
         if checkpoint_type == "evidence":
             command.add_argument("--task-contract", required=True, type=Path)
+        if checkpoint_type == "deployment":
+            command.add_argument("--increment", required=True, type=Path)
+            command.add_argument("--evidence-checkpoint", required=True, type=Path)
         command.set_defaults(handler=checkpoint_apply)
     review = commands.add_parser("review", help="Build and validate bounded review contracts")
     review_commands = review.add_subparsers(dest="review_command", required=True)
@@ -625,6 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument("--next-step", required=True)
     accept.add_argument("--task-contract", required=True, type=Path)
     accept.add_argument("--evidence-checkpoint", required=True, type=Path)
+    accept.add_argument("--deployment-checkpoint", type=Path)
     accept.set_defaults(handler=increment_accept)
     context = commands.add_parser("context", help="Build one bounded Codex agent context")
     context.add_argument("--role", required=True, choices=tuple(AGENT_ROLES))

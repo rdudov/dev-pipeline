@@ -36,6 +36,8 @@ The declared gate selects required evidence IDs and a minimum level. Required ev
 
 `increment submit` validates prerequisites and emits `increment_ready_for_review`. Scenario and architecture digests must match completed lifecycle checkpoints. A later sequence also requires the immediately preceding increment to be completed.
 
+If the achieved evidence level is `deployed`, the increment declares a complete deployment-impact inventory and `increment accept` also requires the current completed, applicable deployment checkpoint. Its increment, scenario, architecture, evidence, source-manifest and applicability bindings are revalidated during acceptance. A not-applicable deployment record can document applicability, but cannot authorize a deployed claim.
+
 A bounded review packet uses `review_type=increment` and binds the submitted artifact’s version and SHA-256 digest. It must also bind the current task contract and completed evidence checkpoint. `increment accept` rehashes those closure artifacts, validates evidence and scenario/failure coverage, verifies that the artifact is the current submitted candidate, and emits `increment_completed` only for `approved`. Missing, failed, blocked, stale, weak, unrepresentative, wrong-entrypoint, mock/stub/fake/harness-only or uncovered mandatory evidence makes completion impossible regardless of reviewer prose. Rework requires fresh digest-bound evidence and review.
 
 This lifecycle does not implement routed conventions or agent scheduling. Those remain a later increment.

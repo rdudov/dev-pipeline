@@ -17,15 +17,18 @@ SCENARIO_DIGEST = "sha256:" + "a" * 64
 ARCHITECTURE_DIGEST = "sha256:" + "b" * 64
 
 
-def increment(sequence=1, kind="walking_skeleton", level="skeleton"):
+def increment(
+    sequence=1, kind="walking_skeleton", level="skeleton",
+    scenario_digest=SCENARIO_DIGEST, architecture_digest=ARCHITECTURE_DIGEST,
+):
     return {
         "schema_version": "1.0",
         "artifact_id": f"increment-{sequence}",
         "artifact_version": "1",
         "sequence": sequence,
         "increment_kind": kind,
-        "scenario_artifact_digest": SCENARIO_DIGEST,
-        "architecture_artifact_digest": ARCHITECTURE_DIGEST,
+        "scenario_artifact_digest": scenario_digest,
+        "architecture_artifact_digest": architecture_digest,
         "scenario_ids": ["SC-07"],
         "failure_modes": [{
             "id": "FM-1",
@@ -46,7 +49,10 @@ def increment(sequence=1, kind="walking_skeleton", level="skeleton"):
     }
 
 
-def prepared_state(path: Path) -> None:
+def prepared_state(
+    path: Path, scenario_digest=SCENARIO_DIGEST, architecture_digest=ARCHITECTURE_DIGEST,
+    scenario_artifact="scenario.json", architecture_artifact="architecture.json",
+) -> None:
     store = LifecycleStore(path)
     identity = RunIdentity.create("task-360")
     store.append(identity, "attempt_started", {
@@ -57,12 +63,12 @@ def prepared_state(path: Path) -> None:
     store.append(identity, "run_completed", {"exit_code": 0})
     store.append(identity, "attempt_completed")
     store.append(identity, "checkpoint_completed", {
-        "checkpoint": "scenario", "artifact": "scenario.json",
-        "artifact_digest": SCENARIO_DIGEST, "next_step": "Architecture",
+        "checkpoint": "scenario", "artifact": str(scenario_artifact),
+        "artifact_digest": scenario_digest, "next_step": "Architecture",
     })
     store.append(identity, "checkpoint_completed", {
-        "checkpoint": "architecture", "artifact": "architecture.json",
-        "artifact_digest": ARCHITECTURE_DIGEST, "next_step": "Walking skeleton",
+        "checkpoint": "architecture", "artifact": str(architecture_artifact),
+        "artifact_digest": architecture_digest, "next_step": "Walking skeleton",
     })
 
 
@@ -73,7 +79,10 @@ def run_cli(*args: str):
     )
 
 
-def closure_files(tmp_path: Path, state: Path):
+def closure_files(
+    tmp_path: Path, state: Path,
+    scenario_digest=SCENARIO_DIGEST, architecture_digest=ARCHITECTURE_DIGEST,
+):
     contract = tmp_path / "task-contract.json"
     contract.write_text(json.dumps({"required_live_evidence": [{"id": "SC-07"}, {"id": "FM-1"}]}))
     result = tmp_path / "real-cli-result.json"
@@ -97,8 +106,8 @@ def closure_files(tmp_path: Path, state: Path):
     evidence.write_text(json.dumps({
         "schema_version": "1.0", "artifact_id": "evidence-1", "artifact_version": "1",
         "task_contract_digest": artifact_digest(contract),
-        "scenario_artifact_digest": SCENARIO_DIGEST,
-        "architecture_artifact_digest": ARCHITECTURE_DIGEST,
+        "scenario_artifact_digest": scenario_digest,
+        "architecture_artifact_digest": architecture_digest,
         "required_subjects": [
             {"id": "SC-07", "kind": "scenario", "mandatory": True},
             {"id": "FM-1", "kind": "failure_mode", "mandatory": True},
@@ -304,6 +313,30 @@ def test_real_cli_accepts_reviewed_skeleton_then_allows_vertical_increment(tmp_p
         "--input", str(second),
     )
     assert submitted.returncode == 0, submitted.stderr
+
+
+def test_deployed_increment_cannot_be_accepted_without_completed_deployment_checkpoint(tmp_path):
+    state = tmp_path / "state"
+    prepared_state(state)
+    artifact = tmp_path / "increment-deployed.json"
+    artifact.write_text(json.dumps(increment(level="deployed")))
+    assert run_cli(
+        "increment", "submit", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact),
+    ).returncode == 0
+    contract, evidence_checkpoint = closure_files(tmp_path, state)
+    packet, decision = review_files(
+        tmp_path, artifact, contract=contract, evidence_checkpoint=evidence_checkpoint,
+    )
+    accepted = run_cli(
+        "increment", "accept", "--task-ref", "task-360", "--state-dir", str(state),
+        "--input", str(artifact), "--packet", str(packet), "--decision", str(decision),
+        "--next-step", "Complete", "--task-contract", str(contract),
+        "--evidence-checkpoint", str(evidence_checkpoint),
+    )
+    assert accepted.returncode == 2
+    assert "requires a deployment checkpoint" in accepted.stderr
+    assert json.loads((state / "state.json").read_text())["increments"]["1"]["status"] == "ready_for_review"
 
 
 def test_allowed_temporary_seam_must_be_removed_by_its_replacement_increment(tmp_path):

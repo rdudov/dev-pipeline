@@ -36,13 +36,13 @@ dev-pipeline context \
   --question "Does this diff satisfy SC-08?" \
   --artifact /path/to/diff-or-artifact \
   --artifact-version 2 \
-  --evidence "installed CLI sequence 17" \
+  --evidence /path/to/installed-cli-sequence-17.jsonl \
   --exclude "Bootstrap 6" \
   --risk publication \
   --output /path/to/context.json
 ```
 
-The packet records artifact digests, one purpose/question, evidence, exclusions, active gate, triggered risks, routed packs, `runtime=codex`, and `legacy_prompt_included=false`. Its digest covers all packet content. Referenced artifacts are rehashed immediately before execution, so a stale packet is refused. Review roles require an artifact version and are instructed to return the existing canonical decision envelope.
+The packet records artifact digests, one purpose/question, digest-bound evidence files, exclusions, active gate, triggered risks, routed packs, `runtime=codex`, and `legacy_prompt_included=false`. Free-form evidence text and unbounded task or conversation history are rejected; every supplied evidence item must be an explicitly named file with a captured digest. The packet digest covers all content. Referenced artifacts and evidence are rehashed immediately before execution, so a stale packet is refused. Review roles require an artifact version and are instructed to return the existing canonical decision envelope.
 
 Run exactly that packet with an explicit Codex invocation:
 

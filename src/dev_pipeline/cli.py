@@ -517,7 +517,10 @@ def agent_run(args: argparse.Namespace) -> int:
             "artifact": {"path": artifact["path"], "version": packet["artifact_version"],
                          "digest": artifact["digest"]},
             "original_constraints": [rule for pack in packet["convention_packs"] for rule in pack["rules"]],
-            "target_instructions": [packet["purpose"]], "evidence": packet["evidence"],
+            "target_instructions": [packet["purpose"]],
+            "evidence": [
+                f"{item['path']} ({item['digest']})" for item in packet["evidence"]
+            ],
             "exclusions": packet["exclusions"], "decision_schema_version": "1.0",
         }
         output["decision"] = validate_decision(decision, review_packet)
@@ -629,7 +632,7 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("--question", required=True)
     context.add_argument("--artifact", action="append", required=True, type=Path)
     context.add_argument("--artifact-version")
-    context.add_argument("--evidence", action="append", default=[])
+    context.add_argument("--evidence", action="append", default=[], type=Path)
     context.add_argument("--exclude", action="append", required=True)
     context.add_argument("--risk", action="append", choices=tuple(sorted(RISKS)), default=[])
     context.add_argument("--output", required=True, type=Path)

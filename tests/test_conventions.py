@@ -51,7 +51,7 @@ def test_every_bounded_role_gets_only_its_gate_and_explicit_risks(tmp_path):
     for role, gate in AGENT_ROLES.items():
         packet = build_context_packet(
             role=role, purpose="Answer one bounded question", question="Is the delta valid?",
-            artifacts=[artifact], evidence=["CLI run"], exclusions=["Other bootstraps"],
+            artifacts=[artifact], evidence=[artifact], exclusions=["Other bootstraps"],
             risks=["publication"], artifact_version="1" if role.endswith("_review") else None,
         )
         assert [pack["id"] for pack in packet["convention_packs"]] == (
@@ -83,6 +83,47 @@ def test_context_packet_rejects_artifact_changed_after_build(tmp_path):
     )
     artifact.write_text("second")
     with pytest.raises(ValueError, match="stale"):
+        validate_context_packet(packet)
+
+
+def test_context_packet_rejects_unbounded_history_request(tmp_path):
+    artifact = tmp_path / "delta.txt"
+    artifact.write_text("delta")
+    packet = build_context_packet(
+        role="diff_review", purpose="Review", question="Approve?", artifacts=[artifact],
+        evidence=[], exclusions=["Unrelated work"], risks=[], artifact_version="1",
+    )
+    packet["history_scope"] = "full_task_and_conversation_history"
+
+    with pytest.raises(ValueError, match="exclude unbounded history"):
+        validate_context_packet(packet)
+
+
+def test_rendered_agent_prompt_explicitly_excludes_unbounded_history(tmp_path):
+    artifact = tmp_path / "delta.txt"
+    artifact.write_text("delta")
+    packet = build_context_packet(
+        role="scenario_review", purpose="Review", question="Approve?", artifacts=[artifact],
+        evidence=[artifact], exclusions=["Other tasks"], risks=[],
+        artifact_version="1",
+    )
+
+    prompt = render_agent_prompt(packet)
+    assert "Unbounded task or conversation history is excluded" in prompt
+    assert packet["history_scope"] == "excluded_unless_explicitly_bound"
+    assert packet["evidence"][0]["digest"].startswith("sha256:")
+
+
+def test_context_packet_rejects_free_form_history_in_evidence(tmp_path):
+    artifact = tmp_path / "delta.txt"
+    artifact.write_text("delta")
+    packet = build_context_packet(
+        role="diff_review", purpose="Review", question="Approve?", artifacts=[artifact],
+        evidence=[], exclusions=["Other work"], risks=[], artifact_version="1",
+    )
+    packet["evidence"] = ["entire task and conversation history"]
+
+    with pytest.raises(ValueError, match="digest-bound artifacts"):
         validate_context_packet(packet)
 
 
@@ -129,7 +170,7 @@ def test_review_agent_validates_canonical_decision(tmp_path, monkeypatch):
     artifact.write_text("delta")
     packet = build_context_packet(
         role="diff_review", purpose="Review", question="Approve?", artifacts=[artifact],
-        artifact_version="1", evidence=["tests"], exclusions=["Bootstrap 6"], risks=[],
+        artifact_version="1", evidence=[artifact], exclusions=["Bootstrap 6"], risks=[],
     )
     packet_path = tmp_path / "packet.json"
     packet_path.write_text(json.dumps(packet))

@@ -115,7 +115,7 @@ def _artifact(path: Path) -> dict[str, str]:
 
 
 def build_context_packet(
-    *, role: str, purpose: str, question: str, artifacts: list[Path], evidence: list[str],
+    *, role: str, purpose: str, question: str, artifacts: list[Path], evidence: list[Path],
     exclusions: list[str], risks: list[str], artifact_version: str | None = None,
 ) -> dict[str, Any]:
     if role not in AGENT_ROLES:
@@ -130,8 +130,10 @@ def build_context_packet(
         "schema_version": SCHEMA_VERSION, "packet_type": "bounded_codex_agent", "runtime": "codex",
         "role": role, "purpose": purpose, "question": question,
         "active_gate": AGENT_ROLES[role], "triggered_risks": list(dict.fromkeys(risks)),
-        "artifacts": [_artifact(path) for path in artifacts], "evidence": evidence,
+        "artifacts": [_artifact(path) for path in artifacts],
+        "evidence": [_artifact(path) for path in evidence],
         "artifact_version": artifact_version,
+        "history_scope": "excluded_unless_explicitly_bound",
         "exclusions": exclusions, "convention_packs": route_conventions(AGENT_ROLES[role], risks),
         "legacy_prompt_included": False,
     }
@@ -156,6 +158,8 @@ def validate_context_packet(value: Any) -> dict[str, Any]:
         raise ValueError("Context packet requires artifacts")
     if not isinstance(value.get("exclusions"), list) or not value["exclusions"]:
         raise ValueError("Context packet requires exclusions")
+    if value.get("history_scope") != "excluded_unless_explicitly_bound":
+        raise ValueError("Context packet must exclude unbounded history")
     expected = route_conventions(AGENT_ROLES[value["role"]], value.get("triggered_risks", []))
     if value.get("active_gate") != AGENT_ROLES[value["role"]] or value.get("convention_packs") != expected:
         raise ValueError("Context packet convention routing is invalid")
@@ -166,6 +170,14 @@ def validate_context_packet(value: Any) -> dict[str, Any]:
         path = Path(artifact["path"])
         if not path.is_file() or _artifact(path)["digest"] != artifact.get("digest"):
             raise ValueError(f"Context artifact digest is stale: {path}")
+    if not isinstance(value.get("evidence"), list):
+        raise ValueError("Context packet evidence must be a list of bound artifacts")
+    for evidence in value["evidence"]:
+        if not isinstance(evidence, dict):
+            raise ValueError("Context packet evidence must be digest-bound artifacts")
+        path = Path(evidence.get("path", ""))
+        if not path.is_file() or _artifact(path)["digest"] != evidence.get("digest"):
+            raise ValueError(f"Context evidence digest is stale: {path}")
     unsigned = dict(value)
     digest = unsigned.pop("packet_digest")
     encoded = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
@@ -177,7 +189,9 @@ def validate_context_packet(value: Any) -> dict[str, Any]:
 def render_agent_prompt(packet: dict[str, Any]) -> str:
     validate_context_packet(packet)
     artifacts = "\n".join(f"- {item['path']} ({item['digest']})" for item in packet["artifacts"])
-    evidence = "\n".join(f"- {item}" for item in packet["evidence"]) or "- None supplied"
+    evidence = "\n".join(
+        f"- {item['path']} ({item['digest']})" for item in packet["evidence"]
+    ) or "- None supplied"
     exclusions = "\n".join(f"- {item}" for item in packet["exclusions"])
     output_contract = "Return a concise evidence-linked answer."
     if packet["role"].endswith("_review"):
@@ -206,6 +220,8 @@ Evidence:
 
 Explicit exclusions:
 {exclusions}
+
+Unbounded task or conversation history is excluded. Use only the digest-bound artifacts and explicitly named evidence above.
 
 Answer only the named question. Cite concrete artifact/evidence references. {output_contract} Do not modify files, expand scope, schedule other roles, or treat prose as a structured approval.
 """

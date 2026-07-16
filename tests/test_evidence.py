@@ -211,6 +211,48 @@ def test_mandatory_evidence_truthfulness_rejections(tmp_path, mutation, message)
         validate_evidence_checkpoint(value, artifact_root=tmp_path)
 
 
+@pytest.mark.parametrize(
+    "mutation,message",
+    [
+        (
+            lambda item: item.update(
+                level="structural",
+                observed_behavior=["prompt includes the required behavioral acceptance text"],
+            ),
+            "weak or unsupported level",
+        ),
+        (
+            lambda item: item.update(
+                level="unit",
+                observed_behavior=["parser recognizes every required evidence field"],
+            ),
+            "weak or unsupported level",
+        ),
+        (
+            lambda item: item["entrypoint"].update(
+                name="tests/check_evidence.py", real=False, production_boundary=False,
+            ),
+            "must use the real production entrypoint",
+        ),
+    ],
+)
+def test_real_cli_rejects_weak_or_test_only_acceptance_evidence(tmp_path, mutation, message):
+    value, contract, _ = checkpoint(tmp_path)
+    mutation(value["evidence"][0])
+    state = tmp_path / "state"
+    value["scenario_artifact_digest"], value["architecture_artifact_digest"] = prepared_state(state)
+    artifact = tmp_path / "evidence.json"
+    artifact.write_text(json.dumps(value))
+
+    result = run_cli(
+        "checkpoint", "evidence", "--task-ref", "task-1", "--state-dir", str(state),
+        "--input", str(artifact), "--task-contract", str(contract), "--next-step", "review",
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
 def test_stale_artifact_is_rejected(tmp_path):
     value, _, result = checkpoint(tmp_path)
     result.write_text("changed\n")
